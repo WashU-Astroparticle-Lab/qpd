@@ -1,0 +1,127 @@
+#########
+# LINES #
+#########
+lines.linewidth:            1
+lines.marker:               None
+lines.markersize:           3
+lines.markeredgewidth:      1
+lines.linestyle:            solid
+
+
+#########
+# PATCH #
+#########
+patch.linewidth:            1
+patch.facecolor:            white
+
+
+########
+# FONT #
+########
+font.size:                  10
+font.family:                serif
+font.serif:                 DejaVu Serif
+font.weight:                normal
+
+mathtext.fontset:           dejavuserif
+
+
+########
+# AXES #
+########
+axes.titlesize:                 10
+axes.labelsize:                 9
+axes.labelpad:                  4
+axes.linewidth:                 1
+axes.titleweight:               normal
+axes.labelweight:               normal
+axes.formatter.min_exponent:    2
+axes.formatter.use_mathtext:    True
+axes.formatter.useoffset:       False
+
+
+#########
+# TICKS #
+#########
+xtick.labelsize:    9
+ytick.labelsize:    9
+
+xtick.major.size:   4
+xtick.minor.size:   2
+ytick.major.size:   4
+ytick.minor.size:   2
+
+xtick.major.width:  1
+xtick.minor.width:  .7
+ytick.major.width:  1
+ytick.minor.width:  .7
+
+xtick.direction:    in
+ytick.direction:    in
+
+
+########
+# GRID #
+########
+grid.color:         9F9F9F
+grid.linestyle:     :
+grid.linewidth:     0.4
+grid.alpha:         1.0
+
+
+##########
+# LEGEND #
+##########
+legend.loc:             lower center
+legend.frameon:         False
+legend.edgecolor:       1
+legend.fancybox:        True
+legend.fontsize:        8
+
+legend.borderpad:     0.2
+legend.labelspacing:  0.2
+legend.handlelength:  2.0
+legend.handleheight:  0.7
+legend.handletextpad: 0.3
+legend.borderaxespad: 0.2
+legend.columnspacing: 0.8
+
+
+##########
+# FIGURE #
+##########
+figure.figsize:     3.375, 2.72
+figure.facecolor:   white
+figure.dpi:         200
+figure.constrained_layout.use: True
+
+
+##########
+# IMAGES #
+##########
+image.cmap:     viridis
+
+
+##################
+# ERRORBAR PLOTS #
+##################
+errorbar.capsize:   1
+
+
+###################
+# HISTOGRAM PLOTS #
+###################
+hist.bins:  auto
+
+
+#################
+# SCATTER PLOTS #
+#################
+scatter.marker: .
+
+
+##################
+# SAVING FIGURES #
+##################
+savefig.dpi:    600
+

@@ -1,0 +1,83 @@
+# Superconducting Material Properties Database
+# 
+# References:
+# - Serniak et al., PRA (2019): https://arxiv.org/pdf/1903.00113
+# - https://arxiv.org/pdf/2405.17192
+# - Standard superconductor references
+
+materials:
+  aluminum:
+    name: "Aluminum"
+    symbol: "Al"
+    description: "Standard superconductor for transmon qubits"
+    properties:
+      dos: 1.72e10
+      fermi_level: 11.6
+      tc: 1.2
+      delta: 1.89e-4
+      notes: "Density of states 1.72e10 [1/(μm³·eV)], most commonly 
+              used in transmon qubits"
+  
+  aluminum_manganese:
+    name: "Aluminum-Manganese Alloy"
+    symbol: "AlMn"
+    description: "Lower Tc alloy for specialized applications"
+    properties:
+      dos: 1.72e10
+      fermi_level: 11.6
+      tc: 0.1
+      delta: 1.57e-5
+      notes: "Used when lower Tc is desired"
+  
+  hafnium:
+    name: "Hafnium"
+    symbol: "Hf"
+    description: "Alternative superconductor with different properties"
+    properties:
+      dos: 2.5e10
+      fermi_level: 9.8
+      tc: 0.128
+      delta: 2.25e-5
+      notes: "Lower Tc, studied in recent OCS experiments"
+  
+  niobium:
+    name: "Niobium"
+    symbol: "Nb"
+    description: "High Tc superconductor for resonators"
+    properties:
+      dos: 1.8e10
+      fermi_level: 5.3
+      tc: 9.2
+      delta: 1.4e-3
+      notes: "High Tc, good for resonators, less QP sensitive"
+  
+  titanium_nitride:
+    name: "Titanium Nitride"
+    symbol: "TiN"
+    description: "Tunable superconductor for high-Q resonators"
+    properties:
+      dos: 2.2e10
+      fermi_level: 8.5
+      tc: 3.0
+      delta: 4.4e-4
+      notes: "Properties tunable via stoichiometry"
+
+# Default material for OCS class if not specified
+default_material: "aluminum"
+
+# Conversion factors and physical constants
+# (These are fundamental and don't vary by material)
+constants:
+  # Planck constant [eV·s]
+  planck_ev_s: 4.135667696e-15
+  
+  # Boltzmann constant [eV/K]
+  kb_ev_k: 8.617333262e-5
+  
+  # Elementary charge [C]
+  e_charge: 1.602176634e-19
+  
+  # BCS gap ratio (dimensionless)
+  # Δ(T=0) / (kB * Tc) for weak-coupling BCS theory
+  bcs_gap_ratio: 1.764
+
