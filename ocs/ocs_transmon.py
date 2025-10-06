@@ -606,6 +606,15 @@ class OCS:
             chi_vals_odd[i, :] = chi_odd
             chi_vals_even[i, :] = chi_even
         
+        # Compute f_10 at sweet spot (n_g = 0.5) for reference lines
+        eigenvalues, _ = self.solve_eigensystem(0.5, charge_cutoff=30)
+        f_10 = (eigenvalues[1] - eigenvalues[0]) / self.PLANCK_EV_S
+        
+        # Compute approximate chi formulas
+        chi_approx_1 = (coupling_g_hz ** 2) / (f_10-readout_freq_hz)  # Hz
+        chi_approx_2 = (coupling_g_hz ** 2) / (f_10-readout_freq_hz) - \
+                       (coupling_g_hz ** 2) / ((f_10-readout_freq_hz) - self.e_c_hz)  # Hz
+        
         with plt.style.context(self._style_path):
             fig, ax = plt.subplots(figsize=figsize)
             
@@ -631,6 +640,14 @@ class OCS:
             ax.set_ylim(ylim)
             ax.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
             ax.set_ylabel(r'$\chi_{i,p}$ [MHz]')
+            
+            # Add approximate formula reference lines
+            ax.axhline(chi_approx_1 / 1e6, color='gray', 
+                      linestyle='--', linewidth=1.5, alpha=0.7,
+                      label=r'$g^2/\Delta$')
+            ax.axhline(chi_approx_2 / 1e6, color='black', 
+                      linestyle=':', linewidth=1.5, alpha=0.7,
+                      label=r'$g^2/\Delta-g^2/(\Delta-E_C)$')
             
             # Construct comprehensive title
             title_parts = [
