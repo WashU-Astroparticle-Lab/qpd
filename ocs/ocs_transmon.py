@@ -677,22 +677,40 @@ class OCS:
             
         Returns
         -------
-        fig, ax : matplotlib figure and axes
+        fig : matplotlib figure
+        (ax1, ax2) : tuple of matplotlib axes
+            ax1: top subplot with parity shift
+            ax2: bottom subplot with detuning ratio
         """
         # Auto-determine frequency range if not provided
         if freq_range_hz is None:
-            _, energies_odd, _ = self.solve_system([0, 0.5], 4)
+            _, energies_odd, _ = self.solve_system([0.5], 4)
             freq_min = freq_min_hz
             freq_odd_3 = ((energies_odd[0, 3] - energies_odd[0, 0]) / 
                          self.PLANCK_EV_S)  # f_03
             freq_max = freq_odd_3 + 0.2e9  # Add 200 MHz
             freq_range_hz = np.linspace(freq_min, freq_max, 500)
         
-        # Calculate f10 for axvspan
+        # Calculate transition frequencies for markers
         _, energies, _ = self.solve_system([0], num_levels)
-        freq_10 = ((energies[0, 1] - energies[0, 0]) / 
+        freq_10_0 = ((energies[0, 1] - energies[0, 0]) / 
                   self.PLANCK_EV_S)
-        
+        freq_20_0 = ((energies[0, 2] - energies[0, 0]) / 
+                  self.PLANCK_EV_S)
+        freq_30_0 = ((energies[0, 3] - energies[0, 0]) / 
+                  self.PLANCK_EV_S)
+        _, energies, _ = self.solve_system([0.5], num_levels)
+        freq_10_05 = ((energies[0, 1] - energies[0, 0]) / 
+                  self.PLANCK_EV_S)
+        freq_20_05 = ((energies[0, 2] - energies[0, 0]) / 
+                  self.PLANCK_EV_S)
+        freq_30_05 = ((energies[0, 3] - energies[0, 0]) / 
+                  self.PLANCK_EV_S)
+        # Median frequency
+        freq_10 = (freq_10_0 + freq_10_05) / 2
+        freq_20 = (freq_20_0 + freq_20_05) / 2
+        freq_30 = (freq_30_0 + freq_30_05) / 2
+
         # Store chi_diff for each offset charge
         chi_diffs = np.zeros((len(offset_charges), len(freq_range_hz)))
         
@@ -709,11 +727,28 @@ class OCS:
                 chi_diffs[idx, i] = chi_odd[0] - chi_even[0]
         
         with plt.style.context(self._style_path):
-            fig, ax = plt.subplots(figsize=figsize)
+            # Create 2 subplots with shared x-axis
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, 
+                                          sharex=True,
+                                          gridspec_kw={'height_ratios': [3, 1],
+                                                      'hspace': 0.01})
             
+            # === Top subplot: parity shift ===
             # Mark f10 region with axvspan
-            ax.axvspan((freq_10 - 0.1e9) / 1e9, (freq_10 + 0.1e9) / 1e9,
-                      alpha=0.2, color='gray', label=r'$f_{10}$', lw=0)
+            ax1.axvspan(freq_10_0 / 1e9, freq_10_05 / 1e9,
+                       alpha=0.2, color='gray', label=r'$f_{10}$', lw=0)
+            
+            # Mark f10 ± g region with axvspan
+            ax1.axvspan((freq_10 - coupling_g_hz) / 1e9, 
+                       (freq_10 + coupling_g_hz) / 1e9,
+                       alpha=0.15, color='red', 
+                       label=r'$f_{10} \pm g$', lw=0)
+            
+            # Mark f20 and f30 regions with axvspan
+            ax1.axvspan(freq_20_0 / 1e9, freq_20_05 / 1e9,
+                       alpha=0.2, color='C0', label=r'$f_{20}$', lw=0)
+            ax1.axvspan(freq_30_0 / 1e9, freq_30_05 / 1e9,
+                       alpha=0.2, color='C1', label=r'$f_{30}$', lw=0)
             
             # Get colormap
             cmap = cm.get_cmap('magma')
@@ -721,13 +756,12 @@ class OCS:
             # Plot curves for each offset charge
             for idx, n_g in enumerate(offset_charges):
                 color = cmap(idx / max(len(offset_charges) - 1, 1))
-                ax.semilogy(freq_range_hz / 1e9, 
+                ax1.semilogy(freq_range_hz / 1e9, 
                            np.abs(chi_diffs[idx, :]) / 1e6, 
                            linewidth=2, color=color, 
                            label=f'$n_g={n_g:.2f}$')
             
-            ax.set_xlabel('Readout Frequency [GHz]')
-            ax.set_ylabel(r'$|\Delta\chi_{0, o} - \Delta\chi_{0, e}|$ [MHz]')
+            ax1.set_ylabel(r'$|\chi_{0, o}-\chi_{0, e}|$ [MHz]')
             
             # Construct comprehensive title
             title_parts = [
@@ -737,12 +771,45 @@ class OCS:
                 f'$g={coupling_g_hz/1e6:.0f}$ MHz',
                 #f'$T={self.temperature_k*1e3:.0f}$ mK'
             ]
-            ax.set_title(', '.join(title_parts), fontsize=7)
+            ax1.set_title(', '.join(title_parts), fontsize=7)
+            ax1.set_xlim(freq_range_hz[0] / 1e9, freq_range_hz[-1] / 1e9)
+            ax1.set_ylim(1e-3)
+            ax1.minorticks_on()
+            ax1.legend(loc="best", fontsize=6, ncol=3)
+            ax1.grid(alpha=0.3, which='both')
             
-            ax.set_ylim(1e-3)
-            ax.minorticks_on()
-            ax.legend(loc="best", fontsize=7)
-            ax.grid(alpha=0.3, which='both')
+            # === Bottom subplot: detuning ratio ===
+            # Mark f10 region with axvspan
+            ax2.axvspan(freq_10_0 / 1e9, freq_10_05 / 1e9,
+                       alpha=0.2, color='gray', lw=0)
+            
+            # Mark f10 ± g region with axvspan
+            ax2.axvspan((freq_10 - coupling_g_hz) / 1e9, 
+                       (freq_10 + coupling_g_hz) / 1e9,
+                       alpha=0.15, color='red', lw=0)
+            
+            # Mark f20 and f30 regions with axvspan
+            ax2.axvspan(freq_20_0 / 1e9, freq_20_05 / 1e9,
+                       alpha=0.2, color='C0', lw=0)
+            ax2.axvspan(freq_30_0 / 1e9, freq_30_05 / 1e9,
+                       alpha=0.2, color='C1', lw=0)
+            
+            # Calculate detuning ratio and mask region between f_10_0 and f_10_05
+            detuning_ratio = (np.abs(freq_range_hz - freq_10) / 
+                            np.abs(freq_range_hz + freq_10))
+            # Set values between f_10_0 and f_10_05 to NaN to create a gap
+            mask_f10 = ((freq_range_hz >= min(freq_10_0, freq_10_05)) & 
+                       (freq_range_hz <= max(freq_10_0, freq_10_05)))
+            detuning_ratio[mask_f10] = np.nan
+            
+            ax2.semilogy(freq_range_hz / 1e9, detuning_ratio, 
+                        linewidth=1, color='black')
+            
+            ax2.set_xlim(freq_range_hz[0] / 1e9, freq_range_hz[-1] / 1e9)
+            ax2.set_xlabel('Readout Frequency [GHz]')
+            ax2.set_ylabel(r'$|f_r - f_{10}|/|f_r+f_{10}|$')
+            ax2.minorticks_on()
+            ax2.grid(alpha=0.3, which='both')
         
         # Print summary
         freq_02 = ((energies[0, 2] - energies[0, 0]) / 
@@ -759,10 +826,12 @@ class OCS:
                         (np.abs(f_r_use - freq_10) + anharmonicity))
         
         print(f"\nf_10: {freq_10 / 1e9:.3f} GHz")
+        print(f"f_20: {freq_20 / 1e9:.3f} GHz")
+        print(f"f_30: {freq_30 / 1e9:.3f} GHz")
         print(f"Resonator frequency: {f_r_use / 1e9:.2f} GHz")
         print(f"χ (resonator state shift): {chi_resonator / 1e6:.3f} MHz")
         
-        return fig, ax
+        return fig, (ax1, ax2)
     
     def plot_parity_shift_vs_ng(self, offset_charges=None, 
                                 coupling_g_hz=150e6, 
