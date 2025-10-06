@@ -611,8 +611,8 @@ class OCS:
         f_10 = (eigenvalues[1] - eigenvalues[0]) / self.PLANCK_EV_S
         
         # Compute approximate chi formulas
-        chi_approx_1 = (coupling_g_hz ** 2) / (f_10-readout_freq_hz)  # Hz
-        chi_approx_2 = (coupling_g_hz ** 2) / (f_10-readout_freq_hz) - \
+        chi_approx_1 = - (coupling_g_hz ** 2) / (f_10-readout_freq_hz)  # Hz
+        chi_approx_2 = - (coupling_g_hz ** 2) / (f_10-readout_freq_hz) + \
                        (coupling_g_hz ** 2) / ((f_10-readout_freq_hz) - self.e_c_hz)  # Hz
         
         with plt.style.context(self._style_path):
@@ -644,10 +644,10 @@ class OCS:
             # Add approximate formula reference lines
             ax.axhline(chi_approx_1 / 1e6, color='gray', 
                       linestyle='--', linewidth=1.5, alpha=0.7,
-                      label=r'$g^2/\Delta$')
+                      label=r'$-g^2/\Delta$')
             ax.axhline(chi_approx_2 / 1e6, color='black', 
                       linestyle=':', linewidth=1.5, alpha=0.7,
-                      label=r'$g^2/\Delta-g^2/(\Delta-E_C)$')
+                      label=r'$-g^2/\Delta+g^2/(\Delta-E_C)$')
             
             # Construct comprehensive title
             title_parts = [
