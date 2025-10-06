@@ -58,7 +58,7 @@ ocs = OCS(e_j_hz, e_c_hz, temperature_k=0.020, r_n_ohm=30e3)
 fig, ax = ocs.plot_energy_levels()
 
 # Or all plots
-figs = ocs.plot_all(coupling_g_hz=200e6, resonator_freq_hz=6.5e9)
+figs = ocs.plot_all(coupling_g_hz=200e6, readout_freq_hz=6.5e9)
 ```
 
 ### Recipe 2: From Capacitance
@@ -88,7 +88,7 @@ energies_even, energies_odd, energy_diff = ocs.solve_system(
 matrix_elements, chi_ip = ocs.compute_dispersive_matrix(
     offset_charge=0.5,
     coupling_g_hz=150e6,
-    resonator_freq_hz=7e9,
+    readout_freq_hz=7e9,
     num_levels=6
 )
 

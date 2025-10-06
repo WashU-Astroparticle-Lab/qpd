@@ -40,7 +40,7 @@ def example_1_basic_usage():
     # Generate all plots
     figs = ocs.plot_all(
         coupling_g_hz=150e6,  # 150 MHz
-        resonator_freq_hz=7.0e9,  # 7 GHz
+        readout_freq_hz=7.0e9,  # 7 GHz
         num_levels=5
     )
     
@@ -70,7 +70,7 @@ def example_2_serniak_parameters():
     # Generate all plots
     figs = ocs.plot_all(
         coupling_g_hz=150e6,
-        resonator_freq_hz=7.0e9,
+        readout_freq_hz=7.0e9,
         num_levels=5
     )
     
@@ -145,11 +145,11 @@ def example_4_custom_analysis():
     
     # Compute dispersive shift at a specific point
     coupling_g_hz = 150e6
-    resonator_freq_hz = 7.0e9
+    readout_freq_hz = 7.0e9
     matrix_elements, chi_ip = ocs.compute_dispersive_matrix(
         offset_charge=0.5,
         coupling_g_hz=coupling_g_hz,
-        resonator_freq_hz=resonator_freq_hz,
+        readout_freq_hz=readout_freq_hz,
         num_levels=4
     )
     
