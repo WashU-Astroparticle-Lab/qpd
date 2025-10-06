@@ -940,6 +940,96 @@ class OCS:
         
         return fig, ax
     
+    def compute_average_chi_0(self, coupling_g_hz, readout_freq_hz, 
+                             num_points=500, num_levels=6):
+        """
+        Compute average dispersive shift for ground state (i=0)
+        
+        Averages chi_0 over offset charges from 0 to 1 for both parities.
+        
+        Parameters
+        ----------
+        coupling_g_hz : float
+            Coupling strength [Hz]
+        readout_freq_hz : float
+            Resonator frequency [Hz]
+        num_points : int, optional
+            Number of offset charge points to sample, default 500
+        num_levels : int, optional
+            Number of levels for dispersive calculation, default 6
+            
+        Returns
+        -------
+        chi_0_avg : float
+            Average dispersive shift for ground state [Hz]
+        """
+        offset_charges = np.linspace(0, 1, num_points)
+        chi_0_odd = np.zeros(num_points)
+        chi_0_even = np.zeros(num_points)
+        
+        for i, n_g in enumerate(offset_charges):
+            # Compute for odd parity
+            _, chi_odd = self.compute_dispersive_matrix(
+                n_g, coupling_g_hz, readout_freq_hz, num_levels, 
+                parity='odd'
+            )
+            chi_0_odd[i] = chi_odd[0]
+            
+            # Compute for even parity
+            _, chi_even = self.compute_dispersive_matrix(
+                n_g, coupling_g_hz, readout_freq_hz, num_levels, 
+                parity='even'
+            )
+            chi_0_even[i] = chi_even[0]
+        
+        # Average over offset charges and both parities
+        chi_0_odd_avg = np.mean(chi_0_odd)
+        chi_0_even_avg = np.mean(chi_0_even)
+        chi_0_avg = (chi_0_odd_avg + chi_0_even_avg) / 2
+        
+        return chi_0_avg
+    
+    def estimate_g_from_chi_0(self, chi_0_measured_hz, readout_freq_hz, 
+                             g_initial_hz=100e6, num_levels=6):
+        """
+        Estimate coupling g from target average dispersive shift chi_0
+        
+        Uses iterative root-finding to determine g that produces the 
+        desired average dispersive shift.
+        
+        Parameters
+        ----------
+        chi_0_measured_hz : float
+            Measured dispersive shift by EPR Chi Matrix (ND) [Hz]
+        readout_freq_hz : float
+            Resonator frequency [Hz]
+        g_initial_hz : float, optional
+            Initial guess for coupling [Hz], default 100 MHz
+        num_levels : int, optional
+            Number of levels for calculation, default 6
+            
+        Returns
+        -------
+        g_estimated_hz : float
+            Estimated coupling strength [Hz]
+        chi_0_final_hz : float
+            Final achieved average dispersive shift [Hz]
+        """
+        from scipy.optimize import fsolve
+        
+        def objective(g):
+            """Objective function: chi_0(g) - target"""
+            chi_0_avg = self.compute_average_chi_0(
+                g, readout_freq_hz, num_points=100, 
+                num_levels=num_levels
+            )
+            return chi_0_avg - chi_0_measured_hz
+        
+        # Solve for g
+        g_estimated_hz = fsolve(objective, g_initial_hz)[0]
+        
+        return g_estimated_hz
+    
     def plot_all(self, offset_charges=None, coupling_g_hz=150e6, 
                 readout_freq_hz=7.0e9, num_levels=5):
         """
@@ -1005,7 +1095,7 @@ class OCS:
         # Figure 3: Dispersive shift
         print("[3/4] Plotting dispersive shift...")
         fig3, _ = self.plot_dispersive_shift(
-            None, coupling_g_hz, readout_freq_hz, num_levels
+            None, coupling_g_hz, readout_freq_hz, num_levels, ylim=[-20, 20]
         )
         figs.append(fig3)
         fig3.show()
