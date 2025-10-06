@@ -638,6 +638,7 @@ class OCS:
                 f'$E_J={self.e_j_hz/1e9:.2f}$ GHz',
                 f'$E_C={self.e_c_hz/1e9:.3f}$ GHz',
                 f'$g={coupling_g_hz/1e6:.0f}$ MHz',
+                f'$f_r={readout_freq_hz/1e9:.2f}$ GHz',
                 #f'$T={self.temperature_k*1e3:.0f}$ mK'
             ]
             ax.set_title(', '.join(title_parts), fontsize=7)
