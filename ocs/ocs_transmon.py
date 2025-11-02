@@ -386,7 +386,7 @@ class OCS:
     
     def plot_energy_levels(self, offset_charges=None, num_levels=5, 
                           freq_resonator_hz=None, coupling_g_hz=None,
-                          figsize=(4, 3)):
+                          figsize=(4, 3), ylim=None):
         """
         Plot energy level diagram vs offset charge
         
@@ -400,6 +400,8 @@ class OCS:
             Number of levels to plot, default 4
         figsize : tuple, optional
             Figure size (width, height), default (4, 3)
+        ylim : tuple, optional
+            Y-axis limits, default None
             
         Returns
         -------
@@ -473,6 +475,8 @@ class OCS:
             if num_levels <= 4:
                 ax.legend(loc="best")
             ax.grid(alpha=0.3)
+            if ylim is not None:
+                ax.set_ylim(ylim)
         
         return fig, ax
     
