@@ -923,7 +923,7 @@ class OCS:
             ax.set_xlim([0, 1])
             ax.set_ylim(1e-3)
             ax.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
-            ax.set_ylabel(r'$|\Delta\chi_{0, o} - \Delta\chi_{0, e}|$ [MHz]')
+            ax.set_ylabel(r'$|\chi_{0, o} - \chi_{0, e}|$ [MHz]')
             
             # Construct comprehensive title
             title_parts = [
