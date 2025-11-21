@@ -733,20 +733,12 @@ class OCS:
         freq_20 = (freq_20_0 + freq_20_05) / 2
         freq_30 = (freq_30_0 + freq_30_05) / 2
 
-        # Store chi_diff for each offset charge
-        chi_diffs = np.zeros((len(offset_charges), len(freq_range_hz)))
-        
-        for idx, n_g in enumerate(offset_charges):
-            for i, f_r in enumerate(freq_range_hz):
-                # Chi for odd parity
-                _, chi_odd = self.compute_dispersive_matrix(
-                    n_g, coupling_g_hz, f_r, num_levels, parity='odd'
-                )
-                # Chi for even parity
-                _, chi_even = self.compute_dispersive_matrix(
-                    n_g, coupling_g_hz, f_r, num_levels, parity='even'
-                )
-                chi_diffs[idx, i] = chi_odd[0] - chi_even[0]
+        # Compute chi_diff for each offset charge
+        # Result shape: (len(freq_range), len(offset_charges))
+        # Transpose to get: (len(offset_charges), len(freq_range))
+        chi_diffs = self.compute_delta_chi_0(
+            freq_range_hz, offset_charges, coupling_g_hz, num_levels
+        ).T
         
         with plt.style.context(self._style_path):
             # Create 2 subplots with shared x-axis
@@ -891,20 +883,10 @@ class OCS:
         freq_10 = ((energies[0, 1] - energies[0, 0]) / 
                   self.PLANCK_EV_S)
         
-        # Store chi_diff for each resonator frequency
-        chi_diffs = np.zeros((len(readout_freqs), len(offset_charges)))
-        
-        for idx, f_r in enumerate(readout_freqs):
-            for i, n_g in enumerate(offset_charges):
-                # Chi for odd parity
-                _, chi_odd = self.compute_dispersive_matrix(
-                    n_g, coupling_g_hz, f_r, num_levels, parity='odd'
-                )
-                # Chi for even parity
-                _, chi_even = self.compute_dispersive_matrix(
-                    n_g, coupling_g_hz, f_r, num_levels, parity='even'
-                )
-                chi_diffs[idx, i] = chi_odd[0] - chi_even[0]
+        # Compute chi_diff for each resonator frequency
+        chi_diffs = self.compute_delta_chi_0(
+            readout_freqs, offset_charges, coupling_g_hz, num_levels
+        )
         
         with plt.style.context(self._style_path):
             fig, ax = plt.subplots(figsize=figsize)
@@ -992,6 +974,53 @@ class OCS:
         chi_0_avg = (chi_0_odd_avg + chi_0_even_avg) / 2
         
         return chi_0_avg
+    
+    def compute_delta_chi_0(self, readout_freqs, offset_charges, 
+                           coupling_g_hz, num_levels=6):
+        """
+        Compute parity-dependent dispersive shift difference
+        
+        Computes Δχ₀ = χ₀,odd - χ₀,even for the ground state across
+        different resonator frequencies and offset charges.
+        
+        Parameters
+        ----------
+        readout_freqs : array_like
+            Resonator frequencies [Hz]
+        offset_charges : array_like
+            Offset charge values (dimensionless)
+        coupling_g_hz : float
+            Coupling strength [Hz]
+        num_levels : int, optional
+            Number of levels for dispersive calculation, default 6
+            
+        Returns
+        -------
+        chi_diffs : ndarray
+            Parity shift difference [Hz], 
+            shape (len(readout_freqs), len(offset_charges))
+        """
+        readout_freqs = np.atleast_1d(readout_freqs)
+        offset_charges = np.atleast_1d(offset_charges)
+        
+        # Store chi_diff for each resonator frequency
+        chi_diffs = np.zeros((len(readout_freqs), len(offset_charges)))
+        
+        for idx, f_r in enumerate(readout_freqs):
+            for i, n_g in enumerate(offset_charges):
+                # Chi for odd parity
+                _, chi_odd = self.compute_dispersive_matrix(
+                    n_g, coupling_g_hz, f_r, num_levels, 
+                    parity='odd'
+                )
+                # Chi for even parity
+                _, chi_even = self.compute_dispersive_matrix(
+                    n_g, coupling_g_hz, f_r, num_levels, 
+                    parity='even'
+                )
+                chi_diffs[idx, i] = chi_odd[0] - chi_even[0]
+        
+        return chi_diffs
     
     def estimate_g_from_chi_0(self, chi_0_measured_hz, readout_freq_hz, 
                              g_initial_hz=100e6, num_levels=6):
