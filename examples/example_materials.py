@@ -1,26 +1,22 @@
 """
-Example demonstrating different superconducting materials in OCS
+Example demonstrating different superconducting materials in QPD
 
 This script shows how to use the materials.yaml database to simulate
-OCS transmons with different superconductors (Al, Hf, Nb, TiN)
+QPD transmons with different superconductors (Al, Hf, Nb, TiN)
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from ocs_transmon import OCS
-from pathlib import Path
-
-# Load custom style
-_style_path = Path(__file__).parent / "ocs.mplstyle"
+from qpd import QPD
 
 
 def example_compare_materials():
     """
-    Compare OCS transmon behavior with different materials
+    Compare QPD transmon behavior with different materials
     """
     print("\n" + "=" * 70)
-    print("Material Comparison: OCS Transmon with Different Superconductors")
+    print("Material Comparison: QPD Transmon with Different Superconductors")
     print("=" * 70)
     
     # Same device parameters
@@ -31,14 +27,14 @@ def example_compare_materials():
     materials = ['aluminum', 'hafnium', 'aluminum_manganese']
     
     # List all available materials
-    print(f"\nAvailable materials: {OCS.list_materials()}")
+    print(f"\nAvailable materials: {QPD.list_materials()}")
     print(f"\nComparing: {materials}\n")
     
     # Create instances for each material
-    ocs_instances = {}
+    qpd_instances = {}
     for mat in materials:
-        ocs_instances[mat] = OCS(e_j_hz, e_c_hz, material=mat)
-        props = ocs_instances[mat]
+        qpd_instances[mat] = QPD(e_j_hz, e_c_hz, material=mat)
+        props = qpd_instances[mat]
         print(f"{mat.upper()}:")
         print(f"  Tc = {props.tc:.3f} K")
         print(f"  Δ = {props.delta_material*1e6:.3f} μeV")
@@ -48,7 +44,7 @@ def example_compare_materials():
     # Compare energy level dispersion
     offset_charges = np.linspace(0, 1, 400)
     
-    with plt.style.context(_style_path):
+    with plt.style.context(QPD._style_path):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7, 2.72))
         
         # Use GnBu colormap for odd parity comparisons
@@ -56,8 +52,8 @@ def example_compare_materials():
         n_materials = len(materials)
         
         for idx, mat in enumerate(materials):
-            ocs = ocs_instances[mat]
-            energies_even, energies_odd, _ = ocs.solve_system(
+            qpd = qpd_instances[mat]
+            energies_even, energies_odd, _ = qpd.solve_system(
                 offset_charges, num_levels=2
             )
             
@@ -66,17 +62,17 @@ def example_compare_materials():
             
             # Plot f_01 for odd parity
             freq_01 = ((energies_odd[:, 1] - energies_odd[:, 0]) / 
-                      ocs.PLANCK_EV_S / 1e9)
+                      qpd.PLANCK_EV_S / 1e9)
             
             # Calculate dispersion (max - min frequency)
             dispersion = np.max(freq_01) - np.min(freq_01)
             
             ax1.plot(offset_charges, freq_01, linewidth=2, color=color,
-                    label=f'{mat} (Tc={ocs.tc:.2f}K)')
+                    label=f'{mat} (Tc={qpd.tc:.2f}K)')
             
             # Plot ground state energy
             e_ground = (energies_odd[:, 0] - energies_odd[0, 0]) / (
-                ocs.PLANCK_EV_S * 1e9
+                qpd.PLANCK_EV_S * 1e9
             )
             ax2.plot(offset_charges, e_ground * 1e3, linewidth=2,
                     color=color, label=f'{mat}')
@@ -98,7 +94,7 @@ def example_compare_materials():
 
 def example_custom_material():
     """
-    Create OCS transmon with custom material properties
+    Create QPD transmon with custom material properties
     """
     print("\n" + "=" * 70)
     print("Custom Material Properties Example")
@@ -109,16 +105,16 @@ def example_custom_material():
     e_c_hz = 0.695e9
     
     print("\nDefault aluminum:")
-    ocs_default = OCS(e_j_hz, e_c_hz, material='aluminum')
-    print(f"  Tc = {ocs_default.tc} K")
-    print(f"  DOS = {ocs_default.dos:.2e}")
+    ocs_default = QPD(e_j_hz, e_c_hz, material='aluminum')
+    print(f"  Tc = {qpd_default.tc} K")
+    print(f"  DOS = {qpd_default.dos:.2e}")
     
     print("\nCustom aluminum (overridden Tc):")
-    ocs_custom = OCS(e_j_hz, e_c_hz, material='aluminum', tc=0.8)
-    print(f"  Tc = {ocs_custom.tc} K (overridden)")
-    print(f"  DOS = {ocs_custom.dos:.2e} (from database)")
+    ocs_custom = QPD(e_j_hz, e_c_hz, material='aluminum', tc=0.8)
+    print(f"  Tc = {qpd_custom.tc} K (overridden)")
+    print(f"  DOS = {qpd_custom.dos:.2e} (from database)")
     
-    return ocs_custom
+    return qpd_custom
 
 
 def example_material_properties():
@@ -129,14 +125,14 @@ def example_material_properties():
     print("Material Properties Database")
     print("=" * 70)
     
-    materials = OCS.list_materials()
+    materials = QPD.list_materials()
     
     print(f"\n{'Material':<20} {'Symbol':<8} {'Tc [K]':<10} "
           f"{'Δ [μeV]':<12} {'DOS [1/(μm³·eV)]'}")
     print("-" * 70)
     
     for mat in materials:
-        props = OCS.get_material_properties(mat)
+        props = QPD.get_material_properties(mat)
         symbol = mat[:2].capitalize() if mat != 'aluminum_manganese' else 'AlMn'
         
         # Convert to float in case YAML parsed as string
@@ -150,55 +146,55 @@ def example_material_properties():
     print()
 
 
-def example_hafnium_ocs():
+def example_hafnium_qpd():
     """
-    Example using Hafnium for OCS transmon
+    Example using Hafnium for QPD transmon
     
     Hafnium has lower Tc than Al, which can be useful for studying
     quasiparticle effects at ultra-low temperatures.
     """
     print("\n" + "=" * 70)
-    print("Hafnium OCS Transmon Example")
+    print("Hafnium QPD Transmon Example")
     print("=" * 70)
     
     # Hafnium device parameters
     e_j_hz = 6.0e9  # 6 GHz
     e_c_hz = 0.5e9  # 500 MHz
     
-    ocs_hf = OCS(
+    qpd_hf = QPD(
         e_j_hz=e_j_hz,
         e_c_hz=e_c_hz,
         material='hafnium',
         temperature_k=0.015  # 15 mK
     )
     
-    print(f"\nHafnium OCS transmon:")
-    print(f"  Material: {ocs_hf.material_name}")
-    print(f"  Tc = {ocs_hf.tc} K")
-    print(f"  Δ = {ocs_hf.delta_material*1e6:.3f} μeV")
-    print(f"  E_J/E_C = {ocs_hf.ej_ec_ratio:.1f}")
-    print(f"  Temperature = {ocs_hf.temperature_k*1e3:.1f} mK")
-    print(f"  T/Tc = {ocs_hf.temperature_k/ocs_hf.tc:.3f}")
+    print(f"\nHafnium QPD transmon:")
+    print(f"  Material: {qpd_hf.material_name}")
+    print(f"  Tc = {qpd_hf.tc} K")
+    print(f"  Δ = {qpd_hf.delta_material*1e6:.3f} μeV")
+    print(f"  E_J/E_C = {qpd_hf.ej_ec_ratio:.1f}")
+    print(f"  Temperature = {qpd_hf.temperature_k*1e3:.1f} mK")
+    print(f"  T/Tc = {qpd_hf.temperature_k/qpd_hf.tc:.3f}")
     
     # Calculate some energy levels
-    energies_even, energies_odd, energy_diff = ocs_hf.solve_system(
+    energies_even, energies_odd, energy_diff = qpd_hf.solve_system(
         [0, 0.25, 0.5], num_levels=3
     )
     
     print(f"\nEnergy levels (GHz):")
     for i, u in enumerate([0, 0.25, 0.5]):
         e01 = ((energies_odd[i, 1] - energies_odd[i, 0]) / 
-              ocs_hf.PLANCK_EV_S / 1e9)
+              qpd_hf.PLANCK_EV_S / 1e9)
         print(f"  u={u:.2f}: E_01 = {e01:.3f} GHz")
     
-    return ocs_hf
+    return qpd_hf
 
 
 def main():
     """Run all material examples"""
     
     print("\n" + "=" * 70)
-    print(" OCS Transmon - Material Properties Examples")
+    print(" QPD Transmon - Material Properties Examples")
     print("=" * 70)
     
     # Display available materials
@@ -208,10 +204,10 @@ def main():
     fig = example_compare_materials()
     
     # Custom properties
-    ocs_custom = example_custom_material()
+    qpd_custom = example_custom_material()
     
     # Hafnium example
-    ocs_hf = example_hafnium_ocs()
+    qpd_hf = example_hafnium_qpd()
     
     plt.show()
     

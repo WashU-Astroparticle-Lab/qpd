@@ -1,12 +1,12 @@
 """
-Offset-Charge-Sensitive (OCS) Transmon Analysis
+QPD Transmon Analysis
 
-This module implements simulation and analysis tools for OCS transmons,
+This module implements simulation and analysis tools for QPD transmons,
 based on the physics described in:
 - Serniak et al., PRA (2019): https://arxiv.org/pdf/1903.00113
 - Additional context from https://arxiv.org/pdf/2405.17192
 
-The OCS transmon is in the intermediate regime between Cooper-pair box 
+The QPD transmon is in the intermediate regime between Cooper-pair box 
 (E_J/E_C ≈ 1) and standard transmon (E_J/E_C ≳ 50), where charge 
 dispersion is measurable.
 """
@@ -20,11 +20,11 @@ import yaml
 from pathlib import Path
 
 
-class OCS:
+class QPD:
     """
-    Offset-Charge-Sensitive Transmon Simulator
+    QPD Transmon Simulator
     
-    This class simulates OCS transmons by diagonalizing the Cooper-pair
+    This class simulates QPD transmons by diagonalizing the Cooper-pair
     box Hamiltonian and computing dispersive shifts for charge-parity
     readout.
     
@@ -40,7 +40,7 @@ class OCS:
     # Materials database cache
     _materials_db = None
     _materials_path = Path(__file__).parent / "materials.yaml"
-    _style_path = Path(__file__).parent / "ocs.mplstyle"
+    _style_path = Path(__file__).parent / "qpd.mplstyle"
     
     @classmethod
     def load_materials_database(cls):
@@ -99,7 +99,7 @@ class OCS:
                  delta_l_hz=None, delta_r_hz=None,
                  material='aluminum', **material_overrides):
         """
-        Initialize OCS transmon simulator
+        Initialize QPD transmon simulator
         
         Parameters
         ----------
@@ -166,7 +166,7 @@ class OCS:
     @classmethod
     def from_capacitance(cls, c_total_f, delta_hz, r_n_ohm, **kwargs):
         """
-        Create OCS instance from capacitance and resistance
+        Create QPD instance from capacitance and resistance
         
         Parameters
         ----------
@@ -181,8 +181,8 @@ class OCS:
             
         Returns
         -------
-        OCS
-            Configured OCS instance
+        QPD
+            Configured QPD instance
         """
         # Compute energies in eV first
         e_c_ev = cls.ELECTRON_CHARGE / (2 * c_total_f)  # eV
@@ -1066,7 +1066,7 @@ class OCS:
     def plot_all(self, offset_charges=None, coupling_g_hz=150e6, 
                 readout_freq_hz=7.0e9, num_levels=5):
         """
-        Generate all standard plots for OCS transmon analysis
+        Generate all standard plots for QPD transmon analysis
         
         Creates four plots:
         1. Energy level diagram
@@ -1093,7 +1093,7 @@ class OCS:
         self._readout_freq_hz = readout_freq_hz  # Store for later use
         
         print("=" * 60)
-        print(f"OCS Transmon Parameters:")
+        print(f"QPD Transmon Parameters:")
         print(f"Material: {self.material_name} (Tc = {self.tc:.3f} K)")
         print(f"Eⱼ = {self.e_j_ev / self.KB_EV_K:.3f} K·kᴮ = "
               f"{self.e_j_hz / 1e9:.3f} GHz")
@@ -1146,14 +1146,14 @@ class OCS:
 
 
 def main():
-    """Example usage of OCS class"""
+    """Example usage of QPD class"""
     # Example from the MATLAB script (WashU parameters)
     ej_ec_ratio = 12
     e_j_hz = 8.335e9  # ~8.3 GHz (0.4 K·kB)
     e_c_hz = e_j_hz / ej_ec_ratio  # Hz
     
-    # Create OCS instance
-    ocs = OCS(
+    # Create QPD instance
+    qpd = QPD(
         e_j_hz=e_j_hz,
         e_c_hz=e_c_hz,
         temperature_k=0.012,  # 12 mK
@@ -1161,7 +1161,7 @@ def main():
     )
     
     # Generate all plots
-    figs = ocs.plot_all(
+    figs = qpd.plot_all(
         coupling_g_hz=150e6,  # 150 MHz
         readout_freq_hz=7.0e9,  # 7 GHz
         num_levels=5
@@ -1169,9 +1169,9 @@ def main():
     
     plt.show()
     
-    return ocs, figs
+    return qpd, figs
 
 
 if __name__ == "__main__":
-    ocs, figs = main()
+    qpd, figs = main()
 
