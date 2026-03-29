@@ -2,7 +2,7 @@
 
 ## Overview
 
-The OCS transmon simulator now supports multiple superconducting materials through a flexible YAML-based configuration system. Material properties are no longer hardcoded, making it easy to:
+The QPD transmon simulator now supports multiple superconducting materials through a flexible YAML-based configuration system. Material properties are no longer hardcoded, making it easy to:
 
 - Switch between different superconductors (Al, Hf, Nb, TiN, etc.)
 - Add custom materials by editing `materials.yaml`
@@ -23,40 +23,40 @@ The OCS transmon simulator now supports multiple superconducting materials throu
 ### Using Default Material (Aluminum)
 
 ```python
-from ocs_transmon import OCS
+from qpd import QPD
 
 # Aluminum is the default
-ocs = OCS(e_j_hz=8.335e9, e_c_hz=0.695e9)
-print(f"Material: {ocs.material_name}, Tc = {ocs.tc} K")
+qpd = QPD(e_j_hz=8.335e9, e_c_hz=0.695e9)
+print(f"Material: {qpd.material_name}, Tc = {qpd.tc} K")
 ```
 
 ### Specifying a Different Material
 
 ```python
 # Use hafnium instead
-ocs_hf = OCS(
+qpd_hf = QPD(
     e_j_hz=8.335e9,
     e_c_hz=0.695e9,
     material='hafnium'
 )
 
-print(f"Material: {ocs_hf.material_name}")
-print(f"Tc = {ocs_hf.tc} K")
-print(f"Δ = {ocs_hf.delta_material*1e6:.2f} μeV")
-print(f"DOS = {ocs_hf.dos:.2e} [1/(μm³·eV)]")
+print(f"Material: {qpd_hf.material_name}")
+print(f"Tc = {qpd_hf.tc} K")
+print(f"Δ = {qpd_hf.delta_material*1e6:.2f} μeV")
+print(f"DOS = {qpd_hf.dos:.2e} [1/(μm³·eV)]")
 ```
 
 ### Listing Available Materials
 
 ```python
-from ocs_transmon import OCS
+from qpd import QPD
 
 # List all materials in database
-materials = OCS.list_materials()
+materials = QPD.list_materials()
 print(f"Available: {materials}")
 
 # Get properties for a specific material
-props = OCS.get_material_properties('hafnium')
+props = QPD.get_material_properties('hafnium')
 print(f"Hafnium Tc: {props['tc']} K")
 ```
 
@@ -68,21 +68,21 @@ You can override specific properties while using a material from the database:
 
 ```python
 # Start with aluminum but use a custom Tc
-ocs = OCS(
+qpd = QPD(
     e_j_hz=8.335e9,
     e_c_hz=0.695e9,
     material='aluminum',
     tc=0.8  # Override Tc to 0.8 K
 )
 
-print(f"Custom Tc: {ocs.tc} K")
-print(f"DOS from database: {ocs.dos:.2e}")
+print(f"Custom Tc: {qpd.tc} K")
+print(f"DOS from database: {qpd.dos:.2e}")
 ```
 
 Override multiple properties:
 
 ```python
-ocs = OCS(
+qpd = QPD(
     e_j_hz=8.335e9,
     e_c_hz=0.695e9,
     material='aluminum',
@@ -100,7 +100,7 @@ Set left and right gaps explicitly (for asymmetric junctions):
 # Convert Hz to eV for gaps if needed
 delta_hz = 45.7e9  # 45.7 GHz
 
-ocs = OCS(
+qpd = QPD(
     e_j_hz=8.335e9,
     e_c_hz=0.695e9,
     material='aluminum',
@@ -201,7 +201,7 @@ delta_al = 1.764 * 8.617e-5 * 1.2 ≈ 1.82e-4 eV
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
-from ocs_transmon import OCS
+from qpd import QPD
 
 # Same device parameters
 e_j_hz = 8.335e9
@@ -212,15 +212,15 @@ materials = ['aluminum', 'hafnium', 'niobium']
 offset_charges = np.linspace(0, 1, 400)
 
 for mat in materials:
-    ocs = OCS(e_j_hz, e_c_hz, material=mat)
-    _, energies_odd, _ = ocs.solve_system(offset_charges, num_levels=2)
+    qpd = QPD(e_j_hz, e_c_hz, material=mat)
+    _, energies_odd, _ = qpd.solve_system(offset_charges, num_levels=2)
     
     freq_01 = (energies_odd[:, 1] - energies_odd[:, 0]) / (
-        ocs.PLANCK_EV_S * 1e9
+        qpd.PLANCK_EV_S * 1e9
     )
     
     plt.plot(offset_charges, freq_01, 
-            label=f'{mat} (Tc={ocs.tc:.2f}K)')
+            label=f'{mat} (Tc={qpd.tc:.2f}K)')
 
 plt.xlabel('Offset Charge')
 plt.ylabel('f_01 [GHz]')
@@ -263,22 +263,22 @@ Consult fabrication literature for specific material requirements.
 
 ```python
 # List materials
-OCS.list_materials()
+QPD.list_materials()
 
 # Get properties
-props = OCS.get_material_properties('hafnium')
+props = QPD.get_material_properties('hafnium')
 
 # Create with material
-ocs = OCS(e_j_hz, e_c_hz, material='hafnium')
+qpd = QPD(e_j_hz, e_c_hz, material='hafnium')
 
 # Override properties
-ocs = OCS(e_j_hz, e_c_hz, material='aluminum', tc=0.8)
+qpd = QPD(e_j_hz, e_c_hz, material='aluminum', tc=0.8)
 
 # Custom gaps
-ocs = OCS(e_j_hz, e_c_hz, delta_l_hz=50e9, delta_r_hz=45e9)
+qpd = QPD(e_j_hz, e_c_hz, delta_l_hz=50e9, delta_r_hz=45e9)
 
 # Access properties
-print(ocs.material_name, ocs.tc, ocs.dos, ocs.delta_material)
+print(qpd.material_name, qpd.tc, qpd.dos, ocs.delta_material)
 ```
 
 ## Troubleshooting
@@ -287,7 +287,7 @@ print(ocs.material_name, ocs.tc, ocs.dos, ocs.delta_material)
 ```
 ValueError: Material 'xxx' not found. Available: aluminum, hafnium, ...
 ```
-→ Check spelling, use `OCS.list_materials()` to see available options
+→ Check spelling, use `QPD.list_materials()` to see available options
 
 **YAML parsing error:**
 → Check `materials.yaml` syntax, ensure proper indentation and no inline comments with scientific notation
@@ -301,7 +301,7 @@ To contribute new material data:
 1. Verify properties from peer-reviewed sources
 2. Add to `materials.yaml` following the existing format
 3. Include references in notes field
-4. Test with `OCS.get_material_properties('your_material')`
+4. Test with `QPD.get_material_properties('your_material')`
 5. Submit pull request with documentation
 
 For questions about physical values, consult:
