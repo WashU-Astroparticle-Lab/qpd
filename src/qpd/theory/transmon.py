@@ -1619,7 +1619,10 @@ class QPD:
             ax.set_title(
                 rf'$\chi^2$ landscape; $\chi^2_\text{{min}}$ = '
                 rf'{chi2_min:.1f}', fontsize=8)
-            ax.legend(loc='best', fontsize=7)
+            leg = ax.legend(loc='lower right', fontsize=7,
+                            facecolor='white', edgecolor='black',
+                            framealpha=0.9, labelcolor='black')
+            leg.get_frame().set_linewidth(0.5)
             ax.minorticks_on()
 
         return fig, ax
