@@ -279,6 +279,17 @@ If `c_g_f` is supplied, results are returned in Farads. If left as
 `-∂²E[Hz]/∂n_g²` in Hz; this is the form the fitter consumes
 internally and lets callers apply any preferred prefactor.
 
+### Visualising the fit uncertainty
+
+`QPD.plot_likelihood_landscape(offset_charges, cq_measured, fit_result)`
+evaluates the chi² on an (E_J, E_C) grid around the fit, plots
+`log10(1 + Δχ²)` as a heatmap, and overlays the
+1σ / 2σ / 3σ joint-coverage contours (`Δχ² ∈ {2.30, 6.18, 11.83}`
+for 2 free parameters) plus the constant-`E_J/E_C` line through the
+fit point. A long narrow valley along that line is the visual
+signature of the ratio-only-determined regime; a round basin means
+both energies are tight.
+
 ### Fitting a measured C_Q trace
 
 `QPD.fit_quantum_capacitance(offset_charges, cq_measured, ...)` fits

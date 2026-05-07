@@ -1483,6 +1483,147 @@ class QPD:
 
         return fig, (ax_top, ax_bot)
 
+    def plot_likelihood_landscape(self, offset_charges, cq_measured,
+                                  fit_result, parity='odd',
+                                  n_grid=21, span_factor=1.5,
+                                  charge_cutoff=10, cq_sigma=None,
+                                  figsize=(4.5, 4)):
+        """
+        Plot the chi² landscape in the (E_J, E_C) plane around a fit.
+
+        Visualises the likelihood-function curvature so the user can
+        see the shallow valley that limits joint (E_J, E_C) recovery
+        from a C_Q(n_g) fit. n_g0 and `scale` are held fixed at their
+        fitted values; only E_J and E_C are scanned.
+
+        Parameters
+        ----------
+        offset_charges : array_like
+            Same n_g grid that was used in `fit_quantum_capacitance`.
+        cq_measured : array_like
+            The measured trace.
+        fit_result : dict
+            Output of `fit_quantum_capacitance`. Used as the centre of
+            the scan and for n_g0 / scale.
+        parity : {'odd', 'even'}, optional
+            Parity branch the data was fit on. Must match the fit.
+        n_grid : int, optional
+            Grid resolution per axis. Default 21 (→ 441 evaluations).
+        span_factor : float, optional
+            (E_J, E_C) range as multiplicative factor around the fit.
+            E.g. 1.5 means [fit/1.5, fit*1.5] log-spaced. Default 1.5.
+        charge_cutoff : int, optional
+            Charge-basis cutoff for the inner solves. Default 10
+            (faster than the fit's 18; sufficient for visualisation
+            in the QPD/transmon regime).
+        cq_sigma : float or array_like, optional
+            Per-point measurement uncertainty used to normalise the
+            chi². Default uses the same heuristic as
+            `fit_quantum_capacitance`.
+        figsize : tuple, optional
+            Figure size, default (4.5, 4).
+
+        Returns
+        -------
+        fig, ax : matplotlib figure and axes.
+
+        Notes
+        -----
+        Confidence-region contours overlay the chi² surface at
+        Δχ² = {2.30, 6.18, 11.83}, which correspond to 68 %, 95 %,
+        and 99 % joint coverage in 2 parameters.
+        """
+        offset_charges = np.asarray(offset_charges, dtype=float)
+        cq_measured = np.asarray(cq_measured, dtype=float)
+
+        if parity not in ('odd', 'even'):
+            raise ValueError(f"Invalid parity: {parity!r}")
+
+        if cq_sigma is None:
+            sigma = max(np.std(cq_measured) * 1e-2,
+                        np.max(np.abs(cq_measured)) * 1e-3)
+        else:
+            sigma = float(np.asarray(cq_sigma).mean())
+
+        ej_fit = float(fit_result['e_j_hz'])
+        ec_fit = float(fit_result['e_c_hz'])
+        ng0_fit = float(fit_result['n_g0'])
+        scale_fit = float(fit_result['scale'])
+
+        ej_grid = np.geomspace(ej_fit / span_factor,
+                               ej_fit * span_factor, n_grid)
+        ec_grid = np.geomspace(ec_fit / span_factor,
+                               ec_fit * span_factor, n_grid)
+
+        chi2 = np.empty((n_grid, n_grid))
+        for i, ec in enumerate(ec_grid):
+            for j, ej in enumerate(ej_grid):
+                tmp = QPD.__new__(QPD)
+                tmp.e_j_hz = ej
+                tmp.e_c_hz = ec
+                tmp.e_j_ev = ej * QPD.PLANCK_EV_S
+                tmp.e_c_ev = ec * QPD.PLANCK_EV_S
+                tmp.delta_l_ev = 0.0
+                tmp.delta_r_ev = 0.0
+                cq_e, cq_o = QPD.compute_quantum_capacitance(
+                    tmp, offset_charges - ng0_fit, c_g_f=None,
+                    charge_cutoff=charge_cutoff,
+                )
+                model = scale_fit * (cq_o if parity == 'odd' else cq_e)
+                resid = (model - cq_measured) / sigma
+                chi2[i, j] = float(np.sum(resid * resid))
+
+        chi2_min = chi2.min()
+        delta_chi2 = chi2 - chi2_min
+
+        # 2D joint-coverage levels
+        levels = (2.30, 6.18, 11.83)
+        labels = {2.30: r'$1\sigma$', 6.18: r'$2\sigma$',
+                  11.83: r'$3\sigma$'}
+
+        # Visualise log10(1 + Δχ²) so both the deep valley *and* the
+        # walls remain readable instead of saturating to one colour.
+        log_dchi2 = np.log10(1.0 + delta_chi2)
+
+        with plt.style.context(self._style_path):
+            fig, ax = plt.subplots(figsize=figsize)
+            EJ, EC = np.meshgrid(ej_grid / 1e9, ec_grid / 1e9)
+
+            pcm = ax.pcolormesh(EJ, EC, log_dchi2,
+                                cmap='magma_r', shading='auto')
+            cbar = fig.colorbar(pcm, ax=ax, pad=0.02)
+            cbar.set_label(r'$\log_{10}(1+\Delta\chi^2)$', fontsize=8)
+
+            cs = ax.contour(EJ, EC, delta_chi2,
+                            levels=levels, colors='white',
+                            linewidths=1.0)
+            ax.clabel(cs, inline=True, fontsize=6,
+                      fmt={lvl: labels[lvl] for lvl in levels})
+
+            # Constant-ratio reference line through the fit point
+            ratio = ej_fit / ec_fit
+            ec_line = np.array([ec_grid[0], ec_grid[-1]])
+            ax.plot(ratio * ec_line / 1e9, ec_line / 1e9,
+                    '--', color='tab:cyan', linewidth=0.8,
+                    alpha=0.7,
+                    label=f'$E_J/E_C={ratio:.2f}$')
+
+            # Mark the fit point on top
+            ax.plot(ej_fit / 1e9, ec_fit / 1e9, '+',
+                    color='tab:cyan', markersize=12,
+                    markeredgewidth=2.0, label='fit')
+
+            ax.set_xlabel(r'$E_J$ [GHz]')
+            ax.set_ylabel(r'$E_C$ [GHz]')
+            ax.set_xscale('log'); ax.set_yscale('log')
+            ax.set_title(
+                rf'$\chi^2$ landscape; $\chi^2_\text{{min}}$ = '
+                rf'{chi2_min:.1f}', fontsize=8)
+            ax.legend(loc='best', fontsize=7)
+            ax.minorticks_on()
+
+        return fig, ax
+
     def plot_all(self, offset_charges=None, coupling_g_hz=150e6,
                 readout_freq_hz=7.0e9, num_levels=5):
         """
