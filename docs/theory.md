@@ -248,6 +248,103 @@ parity.
 | `computeEcEj.m` | `QPD.from_capacitance()` |
 | `dispermatrix.m` | `QPD.compute_dispersive_matrix()` |
 
+## Quantum Capacitance and Readout-Basis Mapping
+
+The package provides primitives for working with the quantum
+capacitance `C_Q(n_g)` and for inverting resonator-basis readout
+measurements.
+
+### Quantum capacitance
+
+For each parity branch, the quantum capacitance is the curvature of
+the level energy with respect to gate charge:
+
+```
+C_Q[F] = -(C_g/2e)^2 · h · ∂²E_level[Hz] / ∂n_g²
+```
+
+where `n_g` is the dimensionless offset charge in units of 2e and
+`E_level[Hz]` is the energy of the chosen level. The package computes
+this numerically (no asymptotic approximation) from the same
+Hamiltonian used elsewhere:
+
+```python
+cq_even, cq_odd = qpd.compute_quantum_capacitance(
+    offset_charges, c_g_f=None, level=0,
+)
+```
+
+If `c_g_f` is supplied, results are returned in Farads. If left as
+`None`, the function returns the *intrinsic* curvature
+`-∂²E[Hz]/∂n_g²` in Hz; this is the form the fitter consumes
+internally and lets callers apply any preferred prefactor.
+
+### Visualising the fit uncertainty
+
+`QPD.plot_likelihood_landscape(offset_charges, cq_measured, fit_result)`
+evaluates the chi² on an (E_J, E_C) grid around the fit, plots
+`log10(1 + Δχ²)` as a heatmap, and overlays the
+1σ / 2σ / 3σ joint-coverage contours (`Δχ² ∈ {2.30, 6.18, 11.83}`
+for 2 free parameters) plus the constant-`E_J/E_C` line through the
+fit point. A long narrow valley along that line is the visual
+signature of the ratio-only-determined regime; a round basin means
+both energies are tight.
+
+### Fitting a measured C_Q trace
+
+`QPD.fit_quantum_capacitance(offset_charges, cq_measured, ...)` fits
+the numerical model to a measured trace and extracts `(E_J, E_C, n_g0,
+scale)`. The optional `n_g0` accounts for an imperfectly-centred
+charge-bias axis; the optional `scale` absorbs any unknown
+amplitude prefactor (so a known `C_g` is *not* required). When the
+data is in a known absolute convention, pass `fit_scale=False,
+fixed_scale=...` to break the (E_C, scale) shape/amplitude
+degeneracy and get tight bounds on `E_J` and `E_C` individually.
+
+### Phase shift → quantum capacitance (resonator basis)
+
+In the resonator basis the qubit acts as a small capacitive load on
+the cavity, so a measured frequency shift maps linearly to a change in
+quantum capacitance:
+
+```
+Δf_r / f_r ≈ - ΔC_Q / (2 C_r)        (low-loading limit)
+```
+
+A driven Lorentzian cavity has phase response
+`φ(Δ_d) = arctan(2 Δ_d / κ)` where `Δ_d = f_drive − f_r`. A *change*
+in measured phase Δφ then corresponds to a frequency shift
+
+```
+Δf_r = Δ_d − (κ/2) · tan(arctan(2 Δ_d / κ) + Δφ)
+```
+
+The two pure helpers in `qpd.theory.readout` implement both steps and
+work for arbitrary drive placement (the readout drive does not have to
+sit on either parity-resolved resonance):
+
+```python
+from qpd import (
+    phase_shift_to_frequency_shift,
+    frequency_shift_to_quantum_capacitance,
+    kappa_from_quality_factors,
+)
+
+kappa   = kappa_from_quality_factors(f_r, q_i, q_c)   # Q_i, Q_c -> κ
+df_r    = phase_shift_to_frequency_shift(delta_phi, kappa, drive_detuning)
+delta_q = frequency_shift_to_quantum_capacitance(df_r, f_r, c_r)
+```
+
+The κ helper uses the standard parallel-Q rule
+`1/Q_loaded = 1/Q_i + 1/Q_c`, `κ = f_r / Q_loaded`. Convention:
+real `Q_c` (symmetric hanger / notch). For asymmetric hangers
+where Q_c is complex, compute the loaded Q yourself and pass
+`κ = f_r / Q_loaded` directly.
+
+See `examples/example_capacitance.py` for an end-to-end demonstration
+covering forward computation, the round-trip fit, and the readout
+chain.
+
 ## References
 
 1. K. Serniak et al., "Direct Dispersive Monitoring of Charge Parity

@@ -381,10 +381,104 @@ class QPD:
         
         # Scale by coupling strength squared
         chi_ip *= coupling_g_hz ** 2
-        
+
         return matrix_elements, chi_ip
-    
-    def plot_energy_levels(self, offset_charges=None, num_levels=5, 
+
+    def compute_quantum_capacitance(self, offset_charges,
+                                    c_g_f=None, charge_cutoff=18,
+                                    level=0):
+        """
+        Compute the quantum capacitance C_Q(n_g) for both parities.
+
+        Numerically differentiates the parity-resolved level energy twice
+        with respect to the dimensionless offset charge n_g (units of 2e):
+
+            C_Q[F] = -(C_g / 2e)^2 · h · ∂²E_level[Hz] / ∂n_g²
+
+        If `c_g_f` is None, the prefactor is dropped and the function
+        instead returns the intrinsic second derivative ∂²E[Hz]/∂n_g²
+        in Hz so callers can apply their own scaling (this is what the
+        fitter consumes — the absolute scale is fit as a free parameter).
+
+        Parameters
+        ----------
+        offset_charges : array_like
+            Dimensionless offset-charge grid n_g where C_Q is evaluated.
+            Should be evenly spaced; finite-difference accuracy degrades
+            otherwise.
+        c_g_f : float, optional
+            Gate capacitance C_g [F]. If provided, the result is in Farads.
+            If None (default), the result is in Hz (intrinsic ∂²E/∂n_g²/h).
+        charge_cutoff : int, optional
+            Charge basis cutoff passed through to `solve_system`,
+            default 18.
+        level : int, optional
+            Energy level whose curvature is taken (0 = ground state).
+            Default 0.
+
+        Returns
+        -------
+        cq_even : ndarray
+            C_Q for even parity at each n_g, shape (len(offset_charges),).
+        cq_odd : ndarray
+            C_Q for odd parity at each n_g, shape (len(offset_charges),).
+
+        Notes
+        -----
+        - C_Q is computed via two successive `np.gradient` calls. To
+          avoid the one-sided-stencil edge artifact at the boundaries
+          of the requested grid, the inner solve is run on a grid
+          padded by 2 points on each side; the padded points are then
+          discarded so the returned arrays match the requested length.
+          This requires a few extra eigensolves but keeps the central-
+          difference accuracy uniform across the grid.
+        - Sign: peaks of C_Q (charge dispersion) appear at n_g = 0.5 for
+          even parity and n_g = 0 (or 1) for odd parity, consistent with
+          the offset_charge → offset_charge + 0.5 convention used by
+          `solve_system`.
+        """
+        offset_charges = np.atleast_1d(np.asarray(offset_charges,
+                                                  dtype=float))
+
+        if offset_charges.size < 2:
+            raise ValueError(
+                "compute_quantum_capacitance needs at least 2 grid points"
+            )
+
+        # Pad both ends of the grid so np.gradient can use central
+        # differences everywhere we report.
+        pad = 2
+        dn = offset_charges[1] - offset_charges[0]
+        left = offset_charges[0] - dn * np.arange(pad, 0, -1)
+        right = offset_charges[-1] + dn * np.arange(1, pad + 1)
+        ng_ext = np.concatenate([left, offset_charges, right])
+
+        num_levels = max(level + 1, 2)
+        e_even_ev, e_odd_ev, _ = self.solve_system(
+            ng_ext, num_levels=num_levels,
+            charge_cutoff=charge_cutoff,
+        )
+
+        # Convert from eV to Hz once, then differentiate on the
+        # padded grid and trim back to the requested range.
+        e_even_hz = e_even_ev[:, level] / self.PLANCK_EV_S
+        e_odd_hz = e_odd_ev[:, level] / self.PLANCK_EV_S
+
+        d2_even_hz = np.gradient(np.gradient(e_even_hz, ng_ext),
+                                 ng_ext)[pad:-pad]
+        d2_odd_hz = np.gradient(np.gradient(e_odd_hz, ng_ext),
+                                ng_ext)[pad:-pad]
+
+        if c_g_f is None:
+            # Intrinsic curvature in Hz (sign convention matches C_Q in F).
+            return -d2_even_hz, -d2_odd_hz
+
+        prefactor = (c_g_f / (2.0 * self.ELECTRON_CHARGE)) ** 2 * h
+        cq_even = -prefactor * d2_even_hz
+        cq_odd = -prefactor * d2_odd_hz
+        return cq_even, cq_odd
+
+    def plot_energy_levels(self, offset_charges=None, num_levels=5,
                           freq_resonator_hz=None, coupling_g_hz=None,
                           figsize=(4, 3), ylim=None):
         """
@@ -1060,10 +1154,480 @@ class QPD:
         
         # Solve for g
         g_estimated_hz = fsolve(objective, g_initial_hz)[0]
-        
+
         return g_estimated_hz
-    
-    def plot_all(self, offset_charges=None, coupling_g_hz=150e6, 
+
+    def fit_quantum_capacitance(self, offset_charges, cq_measured,
+                                parity='odd', p0=None,
+                                charge_cutoff=18, fit_offset=True,
+                                fit_scale=True, fixed_scale=1.0,
+                                e_j_bounds_hz=(0.01e9, 100e9),
+                                e_c_bounds_hz=(0.01e9, 100e9),
+                                n_g0_bounds=(-0.5, 0.5),
+                                scale_bounds=(-np.inf, np.inf),
+                                cq_sigma=None, print_level=0):
+        """
+        Fit a measured C_Q(n_g) trace to extract E_J, E_C, n_g0, scale.
+
+        Uses iminuit (MIGRAD + HESSE) on a least-squares cost. The model
+        evaluates the *intrinsic* second derivative -∂²E[Hz]/∂n_g² for
+        the requested parity using the numeric Hamiltonian (same
+        primitive as `compute_quantum_capacitance`). An overall
+        multiplicative `scale` absorbs the prefactor that relates the
+        dimensionless intrinsic curvature to whatever units the user
+        supplied (Farads if cq_measured is in F, etc.), so a known gate
+        capacitance is *not* required.
+
+        Parameters
+        ----------
+        offset_charges : array_like
+            Dimensionless n_g grid where the trace was sampled.
+        cq_measured : array_like
+            Measured C_Q values at the corresponding n_g.
+        parity : {'odd', 'even'}, optional
+            Which parity branch to fit, default 'odd'.
+        p0 : sequence, optional
+            Initial guess (e_j_hz, e_c_hz, n_g0, scale). Defaults
+            (self.e_j_hz, self.e_c_hz, 0.0, max|C_Q|/max|d²E/dn_g²|).
+        charge_cutoff : int, optional
+            Charge-basis cutoff for the inner Hamiltonian solve.
+        fit_offset : bool, optional
+            If False, fix n_g0 = 0 and only fit (E_J, E_C, scale).
+        fit_scale : bool, optional
+            If True (default) fit the overall amplitude `scale` jointly
+            with the energies. If the data has been pre-converted to a
+            known absolute convention (e.g. intrinsic ∂²E/∂n_g² in Hz),
+            set `fit_scale=False` and pass `fixed_scale` — this breaks
+            the (E_C, scale) shape/amplitude degeneracy and lets the
+            ratio fit be tight.
+        fixed_scale : float, optional
+            Scale used when `fit_scale=False`. Default 1.0.
+        e_j_bounds_hz, e_c_bounds_hz : tuple of (lo, hi), optional
+            Hard bounds on E_J and E_C in Hz. Default (0.01 GHz,
+            100 GHz) for both — covers essentially all useful
+            experimental QPD/transmon parameter space.
+        n_g0_bounds, scale_bounds : tuple of (lo, hi), optional
+            Bounds on n_g0 (default ±0.5) and scale (default
+            unbounded). Pass `(None, None)` to remove a bound.
+        cq_sigma : float or array_like, optional
+            Per-point uncertainty on cq_measured used to weight the
+            least-squares cost. Defaults to a constant value derived
+            from the data magnitude (does not affect the central
+            values; only the reported errors and chi² scale).
+        print_level : int, optional
+            iminuit verbosity (0 silent, 1 short, 2 detailed). Default 0.
+
+        Returns
+        -------
+        result : dict
+            Keys: 'e_j_hz', 'e_c_hz', 'n_g0', 'scale', 'ej_ec_ratio',
+            'errors' (1σ HESSE uncertainties for each parameter),
+            'cq_fit' (model evaluated at offset_charges),
+            'residuals' (cq_measured - cq_fit),
+            'fval' (final chi² value),
+            'minuit' (the underlying iminuit.Minuit instance, for
+            inspection of covariance, MINOS errors, contours, etc.).
+        """
+        from iminuit import Minuit
+
+        offset_charges = np.asarray(offset_charges, dtype=float)
+        cq_measured = np.asarray(cq_measured, dtype=float)
+
+        if parity not in ('odd', 'even'):
+            raise ValueError(f"Invalid parity: {parity!r}")
+
+        if cq_sigma is None:
+            sigma = max(np.std(cq_measured) * 1e-2,
+                        np.max(np.abs(cq_measured)) * 1e-3)
+            sigma = np.full_like(cq_measured, sigma)
+        else:
+            sigma = np.broadcast_to(np.asarray(cq_sigma, dtype=float),
+                                    cq_measured.shape).copy()
+
+        def _intrinsic_cq(ng_grid, e_j_hz, e_c_hz):
+            tmp = QPD.__new__(QPD)
+            tmp.e_j_hz = e_j_hz
+            tmp.e_c_hz = e_c_hz
+            tmp.e_j_ev = e_j_hz * QPD.PLANCK_EV_S
+            tmp.e_c_ev = e_c_hz * QPD.PLANCK_EV_S
+            tmp.delta_l_ev = 0.0
+            tmp.delta_r_ev = 0.0
+            cq_e, cq_o = QPD.compute_quantum_capacitance(
+                tmp, ng_grid, c_g_f=None, charge_cutoff=charge_cutoff,
+            )
+            return cq_o if parity == 'odd' else cq_e
+
+        def model_eval(e_j_hz, e_c_hz, n_g0, scale):
+            return scale * _intrinsic_cq(offset_charges - n_g0,
+                                         e_j_hz, e_c_hz)
+
+        def cost(e_j_hz, e_c_hz, n_g0, scale):
+            resid = (model_eval(e_j_hz, e_c_hz, n_g0, scale)
+                     - cq_measured) / sigma
+            return float(np.sum(resid * resid))
+
+        if p0 is None:
+            cq0 = _intrinsic_cq(offset_charges, self.e_j_hz, self.e_c_hz)
+            denom = np.max(np.abs(cq0))
+            scale_guess = (np.max(np.abs(cq_measured)) / denom
+                           if denom > 0 else 1.0)
+            ej0, ec0, ng0_0 = self.e_j_hz, self.e_c_hz, 0.0
+        else:
+            p0 = list(p0)
+            ej0, ec0 = p0[0], p0[1]
+            ng0_0 = p0[2] if (fit_offset and len(p0) > 2) else 0.0
+            if fit_scale:
+                scale_guess = (p0[-1] if len(p0) >=
+                               (3 + int(fit_offset)) else 1.0)
+            else:
+                scale_guess = fixed_scale
+
+        scale0 = scale_guess if fit_scale else fixed_scale
+
+        m = Minuit(cost, e_j_hz=ej0, e_c_hz=ec0,
+                   n_g0=ng0_0, scale=scale0)
+        m.errordef = Minuit.LEAST_SQUARES
+        m.print_level = print_level
+
+        # Step sizes: O(parameter magnitude) for energies, O(0.01) for
+        # n_g0, O(0.1 * scale) for scale. iminuit picks reasonable
+        # defaults but explicit hints help on this multi-scale problem.
+        m.errors['e_j_hz'] = max(abs(ej0) * 0.05, 1e7)
+        m.errors['e_c_hz'] = max(abs(ec0) * 0.05, 1e6)
+        m.errors['n_g0'] = 0.01
+        m.errors['scale'] = max(abs(scale0) * 0.1, 1e-3)
+
+        m.limits['e_j_hz'] = e_j_bounds_hz
+        m.limits['e_c_hz'] = e_c_bounds_hz
+        m.limits['n_g0'] = n_g0_bounds
+        m.limits['scale'] = scale_bounds
+
+        m.fixed['n_g0'] = not fit_offset
+        m.fixed['scale'] = not fit_scale
+        if not fit_offset:
+            m.values['n_g0'] = 0.0
+        if not fit_scale:
+            m.values['scale'] = fixed_scale
+
+        # Coarse 2D pre-scan in (ratio, E_C) to locate the chi² basin
+        # before iminuit refines locally. The C_Q(n_g) chi² landscape
+        # has a shallow valley along the (E_J, E_C) "weak shape"
+        # direction; without this scan iminuit can settle in a
+        # different basin from the global minimum depending on noise.
+        ratio_grid = np.geomspace(2.0, 50.0, 11)
+        ec_grid = np.geomspace(max(e_c_bounds_hz[0], ec0 / 3),
+                               min(e_c_bounds_hz[1], ec0 * 3), 7)
+        best_fval = np.inf
+        best_start = (ej0, ec0, ng0_0, scale0)
+        for ec_try in ec_grid:
+            for ratio in ratio_grid:
+                ej_try = ec_try * ratio
+                if not (e_j_bounds_hz[0] <= ej_try <= e_j_bounds_hz[1]):
+                    continue
+                f = cost(ej_try, ec_try, ng0_0, scale0)
+                if f < best_fval:
+                    best_fval = f
+                    best_start = (ej_try, ec_try, ng0_0, scale0)
+        m.values['e_j_hz'] = float(np.clip(best_start[0], *e_j_bounds_hz))
+        m.values['e_c_hz'] = float(np.clip(best_start[1], *e_c_bounds_hz))
+        m.values['n_g0'] = ng0_0
+        if fit_scale:
+            m.values['scale'] = scale0
+
+        # MIGRAD + HESSE refinement.
+        m.migrad()
+        m.hesse()
+
+        e_j = float(m.values['e_j_hz'])
+        e_c = float(m.values['e_c_hz'])
+        n_g0 = float(m.values['n_g0'])
+        scale = float(m.values['scale'])
+
+        cq_fit = model_eval(e_j, e_c, n_g0, scale)
+
+        errs = {
+            'e_j_hz': float(m.errors['e_j_hz']),
+            'e_c_hz': float(m.errors['e_c_hz']),
+            'n_g0': float(m.errors['n_g0']) if fit_offset else 0.0,
+            'scale': float(m.errors['scale']) if fit_scale else 0.0,
+        }
+
+        return {
+            'e_j_hz': e_j,
+            'e_c_hz': e_c,
+            'n_g0': n_g0,
+            'scale': scale,
+            'ej_ec_ratio': e_j / e_c,
+            'errors': errs,
+            'cq_fit': cq_fit,
+            'residuals': cq_measured - cq_fit,
+            'fval': float(m.fval),
+            'minuit': m,
+        }
+
+    def plot_quantum_capacitance(self, offset_charges=None, c_g_f=None,
+                                 charge_cutoff=18, figsize=(4, 3)):
+        """
+        Plot quantum capacitance C_Q(n_g) for both parities.
+
+        Parameters
+        ----------
+        offset_charges : array_like, optional
+            Offset-charge grid; defaults to linspace(0, 1, 500).
+        c_g_f : float, optional
+            Gate capacitance [F]. If given, y-axis is in fF; if None
+            the intrinsic ∂²E/∂n_g² is plotted in GHz.
+        charge_cutoff : int, optional
+            Charge-basis cutoff, default 18.
+        figsize : tuple, optional
+            Figure size, default (4, 3).
+
+        Returns
+        -------
+        fig, ax : matplotlib figure and axes
+        """
+        if offset_charges is None:
+            offset_charges = np.linspace(0, 1, 500)
+
+        cq_even, cq_odd = self.compute_quantum_capacitance(
+            offset_charges, c_g_f=c_g_f, charge_cutoff=charge_cutoff,
+        )
+
+        if c_g_f is None:
+            y_even = cq_even / 1e9
+            y_odd = cq_odd / 1e9
+            ylabel = r'$-\partial^2 E / \partial n_g^2$ [GHz]'
+        else:
+            y_even = cq_even * 1e15
+            y_odd = cq_odd * 1e15
+            ylabel = r'$C_Q$ [fF]'
+
+        with plt.style.context(self._style_path):
+            fig, ax = plt.subplots(figsize=figsize)
+            ax.plot(offset_charges, y_even, color='tab:red',
+                    linewidth=2, label='even')
+            ax.plot(offset_charges, y_odd, color='tab:blue',
+                    linewidth=2, label='odd')
+            ax.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
+            ax.set_ylabel(ylabel)
+            ax.set_xlim([offset_charges[0], offset_charges[-1]])
+            title_parts = [
+                f'$\\xi={self.ej_ec_ratio:.1f}$',
+                f'$E_J={self.e_j_hz/1e9:.2f}$ GHz',
+                f'$E_C={self.e_c_hz/1e9:.3f}$ GHz',
+            ]
+            ax.set_title(', '.join(title_parts), fontsize=7)
+            ax.minorticks_on()
+            ax.legend(loc='best', fontsize=7)
+            ax.grid(alpha=0.3)
+
+        return fig, ax
+
+    def plot_capacitance_fit(self, offset_charges, cq_measured,
+                             fit_result, units='Hz', figsize=(4, 4)):
+        """
+        Plot a measured C_Q trace with the best-fit overlay and residuals.
+
+        Parameters
+        ----------
+        offset_charges : array_like
+            n_g values at which the data was sampled.
+        cq_measured : array_like
+            Measured C_Q values (same units as `fit_result['cq_fit']`).
+        fit_result : dict
+            Output of `fit_quantum_capacitance`.
+        units : str, optional
+            Unit string used to label the y-axis of both panels. Default
+            'Hz' (intrinsic curvature). Use e.g. 'F', 'fF', or 'aF' when
+            the input was in absolute capacitance units.
+        figsize : tuple, optional
+            Figure size, default (4, 4).
+
+        Returns
+        -------
+        fig, (ax_top, ax_bot) : figure and (data, residual) axes.
+        """
+        offset_charges = np.asarray(offset_charges, dtype=float)
+        cq_measured = np.asarray(cq_measured, dtype=float)
+        cq_fit = fit_result['cq_fit']
+        resid = fit_result['residuals']
+
+        with plt.style.context(self._style_path):
+            fig, (ax_top, ax_bot) = plt.subplots(
+                2, 1, figsize=figsize, sharex=True,
+                gridspec_kw={'height_ratios': [3, 1]},
+            )
+            ax_top.plot(offset_charges, cq_measured, 'o',
+                        markersize=3, color='black', label='measured')
+            ax_top.plot(offset_charges, cq_fit, '-',
+                        color='tab:red', linewidth=2, label='fit')
+            ax_top.set_ylabel(rf'$C_Q$ [{units}]')
+            title_parts = [
+                f"$E_J/E_C={fit_result['ej_ec_ratio']:.2f}$",
+                f"$E_J={fit_result['e_j_hz']/1e9:.3f}$ GHz",
+                f"$E_C={fit_result['e_c_hz']/1e9:.4f}$ GHz",
+                f"$n_{{g0}}={fit_result['n_g0']:+.3f}$",
+            ]
+            ax_top.set_title(', '.join(title_parts), fontsize=7)
+            ax_top.legend(loc='best', fontsize=7)
+            ax_top.minorticks_on()
+            ax_top.grid(alpha=0.3)
+
+            ax_bot.plot(offset_charges, resid, '.',
+                        markersize=3, color='tab:gray')
+            ax_bot.axhline(0, color='black', linewidth=0.8, alpha=0.6)
+            ax_bot.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
+            ax_bot.set_ylabel(f'residual [{units}]')
+            ax_bot.minorticks_on()
+            ax_bot.grid(alpha=0.3)
+
+        return fig, (ax_top, ax_bot)
+
+    def plot_likelihood_landscape(self, offset_charges, cq_measured,
+                                  fit_result, parity='odd',
+                                  n_grid=21, span_factor=1.5,
+                                  charge_cutoff=10, cq_sigma=None,
+                                  figsize=(4.5, 4)):
+        """
+        Plot the chi² landscape in the (E_J, E_C) plane around a fit.
+
+        Visualises the likelihood-function curvature so the user can
+        see the shallow valley that limits joint (E_J, E_C) recovery
+        from a C_Q(n_g) fit. n_g0 and `scale` are held fixed at their
+        fitted values; only E_J and E_C are scanned.
+
+        Parameters
+        ----------
+        offset_charges : array_like
+            Same n_g grid that was used in `fit_quantum_capacitance`.
+        cq_measured : array_like
+            The measured trace.
+        fit_result : dict
+            Output of `fit_quantum_capacitance`. Used as the centre of
+            the scan and for n_g0 / scale.
+        parity : {'odd', 'even'}, optional
+            Parity branch the data was fit on. Must match the fit.
+        n_grid : int, optional
+            Grid resolution per axis. Default 21 (→ 441 evaluations).
+        span_factor : float, optional
+            (E_J, E_C) range as multiplicative factor around the fit.
+            E.g. 1.5 means [fit/1.5, fit*1.5] log-spaced. Default 1.5.
+        charge_cutoff : int, optional
+            Charge-basis cutoff for the inner solves. Default 10
+            (faster than the fit's 18; sufficient for visualisation
+            in the QPD/transmon regime).
+        cq_sigma : float or array_like, optional
+            Per-point measurement uncertainty used to normalise the
+            chi². Default uses the same heuristic as
+            `fit_quantum_capacitance`.
+        figsize : tuple, optional
+            Figure size, default (4.5, 4).
+
+        Returns
+        -------
+        fig, ax : matplotlib figure and axes.
+
+        Notes
+        -----
+        Confidence-region contours overlay the chi² surface at
+        Δχ² = {2.30, 6.18, 11.83}, which correspond to 68 %, 95 %,
+        and 99 % joint coverage in 2 parameters.
+        """
+        offset_charges = np.asarray(offset_charges, dtype=float)
+        cq_measured = np.asarray(cq_measured, dtype=float)
+
+        if parity not in ('odd', 'even'):
+            raise ValueError(f"Invalid parity: {parity!r}")
+
+        if cq_sigma is None:
+            sigma = max(np.std(cq_measured) * 1e-2,
+                        np.max(np.abs(cq_measured)) * 1e-3)
+        else:
+            sigma = float(np.asarray(cq_sigma).mean())
+
+        ej_fit = float(fit_result['e_j_hz'])
+        ec_fit = float(fit_result['e_c_hz'])
+        ng0_fit = float(fit_result['n_g0'])
+        scale_fit = float(fit_result['scale'])
+
+        ej_grid = np.geomspace(ej_fit / span_factor,
+                               ej_fit * span_factor, n_grid)
+        ec_grid = np.geomspace(ec_fit / span_factor,
+                               ec_fit * span_factor, n_grid)
+
+        chi2 = np.empty((n_grid, n_grid))
+        for i, ec in enumerate(ec_grid):
+            for j, ej in enumerate(ej_grid):
+                tmp = QPD.__new__(QPD)
+                tmp.e_j_hz = ej
+                tmp.e_c_hz = ec
+                tmp.e_j_ev = ej * QPD.PLANCK_EV_S
+                tmp.e_c_ev = ec * QPD.PLANCK_EV_S
+                tmp.delta_l_ev = 0.0
+                tmp.delta_r_ev = 0.0
+                cq_e, cq_o = QPD.compute_quantum_capacitance(
+                    tmp, offset_charges - ng0_fit, c_g_f=None,
+                    charge_cutoff=charge_cutoff,
+                )
+                model = scale_fit * (cq_o if parity == 'odd' else cq_e)
+                resid = (model - cq_measured) / sigma
+                chi2[i, j] = float(np.sum(resid * resid))
+
+        chi2_min = chi2.min()
+        delta_chi2 = chi2 - chi2_min
+
+        # 2D joint-coverage levels
+        levels = (2.30, 6.18, 11.83)
+        labels = {2.30: r'$1\sigma$', 6.18: r'$2\sigma$',
+                  11.83: r'$3\sigma$'}
+
+        # Visualise log10(1 + Δχ²) so both the deep valley *and* the
+        # walls remain readable instead of saturating to one colour.
+        log_dchi2 = np.log10(1.0 + delta_chi2)
+
+        with plt.style.context(self._style_path):
+            fig, ax = plt.subplots(figsize=figsize)
+            EJ, EC = np.meshgrid(ej_grid / 1e9, ec_grid / 1e9)
+
+            pcm = ax.pcolormesh(EJ, EC, log_dchi2,
+                                cmap='magma_r', shading='auto')
+            cbar = fig.colorbar(pcm, ax=ax, pad=0.02)
+            cbar.set_label(r'$\log_{10}(1+\Delta\chi^2)$', fontsize=8)
+
+            cs = ax.contour(EJ, EC, delta_chi2,
+                            levels=levels, colors='white',
+                            linewidths=1.0)
+            ax.clabel(cs, inline=True, fontsize=6,
+                      fmt={lvl: labels[lvl] for lvl in levels})
+
+            # Constant-ratio reference line through the fit point
+            ratio = ej_fit / ec_fit
+            ec_line = np.array([ec_grid[0], ec_grid[-1]])
+            ax.plot(ratio * ec_line / 1e9, ec_line / 1e9,
+                    '--', color='tab:cyan', linewidth=0.8,
+                    alpha=0.7,
+                    label=f'$E_J/E_C={ratio:.2f}$')
+
+            # Mark the fit point on top
+            ax.plot(ej_fit / 1e9, ec_fit / 1e9, '+',
+                    color='tab:cyan', markersize=12,
+                    markeredgewidth=2.0, label='fit')
+
+            ax.set_xlabel(r'$E_J$ [GHz]')
+            ax.set_ylabel(r'$E_C$ [GHz]')
+            ax.set_xscale('log'); ax.set_yscale('log')
+            ax.set_title(
+                rf'$\chi^2$ landscape; $\chi^2_\text{{min}}$ = '
+                rf'{chi2_min:.1f}', fontsize=8)
+            leg = ax.legend(loc='lower right', fontsize=7,
+                            facecolor='white', edgecolor='black',
+                            framealpha=0.9, labelcolor='black')
+            leg.get_frame().set_linewidth(0.5)
+            ax.minorticks_on()
+
+        return fig, ax
+
+    def plot_all(self, offset_charges=None, coupling_g_hz=150e6,
                 readout_freq_hz=7.0e9, num_levels=5):
         """
         Generate all standard plots for QPD transmon analysis
