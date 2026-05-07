@@ -316,11 +316,19 @@ sit on either parity-resolved resonance):
 from qpd import (
     phase_shift_to_frequency_shift,
     frequency_shift_to_quantum_capacitance,
+    kappa_from_quality_factors,
 )
 
+kappa   = kappa_from_quality_factors(f_r, q_i, q_c)   # Q_i, Q_c -> κ
 df_r    = phase_shift_to_frequency_shift(delta_phi, kappa, drive_detuning)
 delta_q = frequency_shift_to_quantum_capacitance(df_r, f_r, c_r)
 ```
+
+The κ helper uses the standard parallel-Q rule
+`1/Q_loaded = 1/Q_i + 1/Q_c`, `κ = f_r / Q_loaded`. Convention:
+real `Q_c` (symmetric hanger / notch). For asymmetric hangers
+where Q_c is complex, compute the loaded Q yourself and pass
+`κ = f_r / Q_loaded` directly.
 
 See `examples/example_capacitance.py` for an end-to-end demonstration
 covering forward computation, the round-trip fit, and the readout

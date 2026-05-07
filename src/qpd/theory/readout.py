@@ -36,6 +36,13 @@ Conventions
       ⇒  ΔC_Q [F]  =  -2 · C_r · Δf_r / f_r.
 
   `frequency_shift_to_quantum_capacitance` implements this directly.
+
+- The loaded linewidth κ used by the phase helpers can be derived from
+  internal and coupling quality factors via
+
+      1/Q_loaded = 1/Q_i + 1/Q_c,        κ = f_r / Q_loaded.
+
+  `kappa_from_quality_factors` returns κ given (f_r, Q_i, Q_c).
 """
 
 import numpy as np
@@ -69,6 +76,38 @@ def phase_shift_to_frequency_shift(delta_phase_rad,
     phi0 = np.arctan(2.0 * np.asarray(drive_detuning_hz) / kappa_hz)
     return (np.asarray(drive_detuning_hz)
             - 0.5 * kappa_hz * np.tan(phi0 + np.asarray(delta_phase_rad)))
+
+
+def kappa_from_quality_factors(f_r_hz, q_i, q_c):
+    """
+    Loaded resonator linewidth κ from internal and coupling Q factors.
+
+    Uses the parallel-Q rule
+
+        1/Q_loaded = 1/Q_i + 1/Q_c,
+        κ = f_r / Q_loaded
+          = f_r · (1/Q_i + 1/Q_c).
+
+    Convention: Q_c is taken to be real (symmetric hanger / notch
+    geometry). For asymmetric hangers where the coupling Q is complex,
+    pass `Re(1/Q_c)` × Q_c equivalent or use the loaded Q directly.
+
+    Parameters
+    ----------
+    f_r_hz : float or array_like
+        Resonator frequency f_r [Hz].
+    q_i : float or array_like
+        Internal (intrinsic) quality factor.
+    q_c : float or array_like
+        Coupling quality factor.
+
+    Returns
+    -------
+    kappa_hz : float or ndarray
+        Loaded resonator linewidth κ (FWHM) in Hz.
+    """
+    q_inv = 1.0 / np.asarray(q_i) + 1.0 / np.asarray(q_c)
+    return np.asarray(f_r_hz) * q_inv
 
 
 def frequency_shift_to_quantum_capacitance(delta_f_hz, f_r_hz, c_r_f):
