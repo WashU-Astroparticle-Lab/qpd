@@ -425,10 +425,13 @@ class QPD:
 
         Notes
         -----
-        - C_Q is computed via two successive `np.gradient` calls; central
-          differences are used in the interior, forward/backward at the
-          edges. Use a fine, uniform grid (≥ a few hundred points across
-          the period) to keep the second derivative well-resolved.
+        - C_Q is computed via two successive `np.gradient` calls. To
+          avoid the one-sided-stencil edge artifact at the boundaries
+          of the requested grid, the inner solve is run on a grid
+          padded by 2 points on each side; the padded points are then
+          discarded so the returned arrays match the requested length.
+          This requires a few extra eigensolves but keeps the central-
+          difference accuracy uniform across the grid.
         - Sign: peaks of C_Q (charge dispersion) appear at n_g = 0.5 for
           even parity and n_g = 0 (or 1) for odd parity, consistent with
           the offset_charge → offset_charge + 0.5 convention used by
@@ -437,20 +440,34 @@ class QPD:
         offset_charges = np.atleast_1d(np.asarray(offset_charges,
                                                   dtype=float))
 
+        if offset_charges.size < 2:
+            raise ValueError(
+                "compute_quantum_capacitance needs at least 2 grid points"
+            )
+
+        # Pad both ends of the grid so np.gradient can use central
+        # differences everywhere we report.
+        pad = 2
+        dn = offset_charges[1] - offset_charges[0]
+        left = offset_charges[0] - dn * np.arange(pad, 0, -1)
+        right = offset_charges[-1] + dn * np.arange(1, pad + 1)
+        ng_ext = np.concatenate([left, offset_charges, right])
+
         num_levels = max(level + 1, 2)
         e_even_ev, e_odd_ev, _ = self.solve_system(
-            offset_charges, num_levels=num_levels,
+            ng_ext, num_levels=num_levels,
             charge_cutoff=charge_cutoff,
         )
 
-        # Convert from eV to Hz once, then differentiate.
+        # Convert from eV to Hz once, then differentiate on the
+        # padded grid and trim back to the requested range.
         e_even_hz = e_even_ev[:, level] / self.PLANCK_EV_S
         e_odd_hz = e_odd_ev[:, level] / self.PLANCK_EV_S
 
-        d2_even_hz = np.gradient(np.gradient(e_even_hz, offset_charges),
-                                 offset_charges)
-        d2_odd_hz = np.gradient(np.gradient(e_odd_hz, offset_charges),
-                                offset_charges)
+        d2_even_hz = np.gradient(np.gradient(e_even_hz, ng_ext),
+                                 ng_ext)[pad:-pad]
+        d2_odd_hz = np.gradient(np.gradient(e_odd_hz, ng_ext),
+                                ng_ext)[pad:-pad]
 
         if c_g_f is None:
             # Intrinsic curvature in Hz (sign convention matches C_Q in F).
@@ -1347,7 +1364,7 @@ class QPD:
         return fig, ax
 
     def plot_capacitance_fit(self, offset_charges, cq_measured,
-                             fit_result, figsize=(4, 4)):
+                             fit_result, units='Hz', figsize=(4, 4)):
         """
         Plot a measured C_Q trace with the best-fit overlay and residuals.
 
@@ -1359,6 +1376,10 @@ class QPD:
             Measured C_Q values (same units as `fit_result['cq_fit']`).
         fit_result : dict
             Output of `fit_quantum_capacitance`.
+        units : str, optional
+            Unit string used to label the y-axis of both panels. Default
+            'Hz' (intrinsic curvature). Use e.g. 'F', 'fF', or 'aF' when
+            the input was in absolute capacitance units.
         figsize : tuple, optional
             Figure size, default (4, 4).
 
@@ -1380,7 +1401,7 @@ class QPD:
                         markersize=3, color='black', label='measured')
             ax_top.plot(offset_charges, cq_fit, '-',
                         color='tab:red', linewidth=2, label='fit')
-            ax_top.set_ylabel(r'$C_Q$')
+            ax_top.set_ylabel(rf'$C_Q$ [{units}]')
             title_parts = [
                 f"$E_J/E_C={fit_result['ej_ec_ratio']:.2f}$",
                 f"$E_J={fit_result['e_j_hz']/1e9:.3f}$ GHz",
@@ -1396,7 +1417,7 @@ class QPD:
                         markersize=3, color='tab:gray')
             ax_bot.axhline(0, color='black', linewidth=0.8, alpha=0.6)
             ax_bot.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
-            ax_bot.set_ylabel('residual')
+            ax_bot.set_ylabel(f'residual [{units}]')
             ax_bot.minorticks_on()
             ax_bot.grid(alpha=0.3)
 
