@@ -1161,17 +1161,22 @@ class QPD:
                                 parity='odd', p0=None,
                                 charge_cutoff=18, fit_offset=True,
                                 fit_scale=True, fixed_scale=1.0,
-                                bounds=None):
+                                e_j_bounds_hz=(0.01e9, 100e9),
+                                e_c_bounds_hz=(0.01e9, 100e9),
+                                n_g0_bounds=(-0.5, 0.5),
+                                scale_bounds=(-np.inf, np.inf),
+                                cq_sigma=None, print_level=0):
         """
         Fit a measured C_Q(n_g) trace to extract E_J, E_C, n_g0, scale.
 
-        The model evaluates the *intrinsic* second derivative
-        -∂²E[Hz]/∂n_g² for the requested parity using the numeric
-        Hamiltonian (same primitive as `compute_quantum_capacitance`).
-        An overall multiplicative `scale` absorbs the prefactor that
-        relates the dimensionless intrinsic curvature to whatever units
-        the user supplied (Farads if cq_measured is in F, etc.), so a
-        known gate capacitance is *not* required.
+        Uses iminuit (MIGRAD + HESSE) on a least-squares cost. The model
+        evaluates the *intrinsic* second derivative -∂²E[Hz]/∂n_g² for
+        the requested parity using the numeric Hamiltonian (same
+        primitive as `compute_quantum_capacitance`). An overall
+        multiplicative `scale` absorbs the prefactor that relates the
+        dimensionless intrinsic curvature to whatever units the user
+        supplied (Farads if cq_measured is in F, etc.), so a known gate
+        capacitance is *not* required.
 
         Parameters
         ----------
@@ -1197,21 +1202,33 @@ class QPD:
             ratio fit be tight.
         fixed_scale : float, optional
             Scale used when `fit_scale=False`. Default 1.0.
-        bounds : 2-tuple, optional
-            ((lo_E_J, lo_E_C, lo_n_g0, lo_scale),
-             (hi_E_J, hi_E_C, hi_n_g0, hi_scale))
-            for `scipy.optimize.curve_fit`. If None, sensible defaults
-            are used (positive E_J, E_C; |n_g0| < 0.5; scale unbounded).
+        e_j_bounds_hz, e_c_bounds_hz : tuple of (lo, hi), optional
+            Hard bounds on E_J and E_C in Hz. Default (0.01 GHz,
+            100 GHz) for both — covers essentially all useful
+            experimental QPD/transmon parameter space.
+        n_g0_bounds, scale_bounds : tuple of (lo, hi), optional
+            Bounds on n_g0 (default ±0.5) and scale (default
+            unbounded). Pass `(None, None)` to remove a bound.
+        cq_sigma : float or array_like, optional
+            Per-point uncertainty on cq_measured used to weight the
+            least-squares cost. Defaults to a constant value derived
+            from the data magnitude (does not affect the central
+            values; only the reported errors and chi² scale).
+        print_level : int, optional
+            iminuit verbosity (0 silent, 1 short, 2 detailed). Default 0.
 
         Returns
         -------
         result : dict
             Keys: 'e_j_hz', 'e_c_hz', 'n_g0', 'scale', 'ej_ec_ratio',
-            'errors' (1σ uncertainties for each parameter),
+            'errors' (1σ HESSE uncertainties for each parameter),
             'cq_fit' (model evaluated at offset_charges),
-            'residuals' (cq_measured - cq_fit), 'pcov' (full covariance).
+            'residuals' (cq_measured - cq_fit),
+            'fval' (final chi² value),
+            'minuit' (the underlying iminuit.Minuit instance, for
+            inspection of covariance, MINOS errors, contours, etc.).
         """
-        from scipy.optimize import curve_fit
+        from iminuit import Minuit
 
         offset_charges = np.asarray(offset_charges, dtype=float)
         cq_measured = np.asarray(cq_measured, dtype=float)
@@ -1219,9 +1236,16 @@ class QPD:
         if parity not in ('odd', 'even'):
             raise ValueError(f"Invalid parity: {parity!r}")
 
+        if cq_sigma is None:
+            sigma = max(np.std(cq_measured) * 1e-2,
+                        np.max(np.abs(cq_measured)) * 1e-3)
+            sigma = np.full_like(cq_measured, sigma)
+        else:
+            sigma = np.broadcast_to(np.asarray(cq_sigma, dtype=float),
+                                    cq_measured.shape).copy()
+
         def _intrinsic_cq(ng_grid, e_j_hz, e_c_hz):
             tmp = QPD.__new__(QPD)
-            # Minimal attributes needed by solve_system + 2nd derivative.
             tmp.e_j_hz = e_j_hz
             tmp.e_c_hz = e_c_hz
             tmp.e_j_ev = e_j_hz * QPD.PLANCK_EV_S
@@ -1233,64 +1257,99 @@ class QPD:
             )
             return cq_o if parity == 'odd' else cq_e
 
-        if fit_offset and fit_scale:
-            def model(ng, e_j_hz, e_c_hz, n_g0, scale):
-                return scale * _intrinsic_cq(ng - n_g0, e_j_hz, e_c_hz)
-        elif fit_offset and not fit_scale:
-            def model(ng, e_j_hz, e_c_hz, n_g0):
-                return fixed_scale * _intrinsic_cq(
-                    ng - n_g0, e_j_hz, e_c_hz)
-        elif (not fit_offset) and fit_scale:
-            def model(ng, e_j_hz, e_c_hz, scale):
-                return scale * _intrinsic_cq(ng, e_j_hz, e_c_hz)
-        else:
-            def model(ng, e_j_hz, e_c_hz):
-                return fixed_scale * _intrinsic_cq(ng, e_j_hz, e_c_hz)
+        def model_eval(e_j_hz, e_c_hz, n_g0, scale):
+            return scale * _intrinsic_cq(offset_charges - n_g0,
+                                         e_j_hz, e_c_hz)
+
+        def cost(e_j_hz, e_c_hz, n_g0, scale):
+            resid = (model_eval(e_j_hz, e_c_hz, n_g0, scale)
+                     - cq_measured) / sigma
+            return float(np.sum(resid * resid))
 
         if p0 is None:
             cq0 = _intrinsic_cq(offset_charges, self.e_j_hz, self.e_c_hz)
             denom = np.max(np.abs(cq0))
             scale_guess = (np.max(np.abs(cq_measured)) / denom
                            if denom > 0 else 1.0)
-            base = (self.e_j_hz, self.e_c_hz)
-            if fit_offset and fit_scale:
-                p0 = base + (0.0, scale_guess)
-            elif fit_offset and not fit_scale:
-                p0 = base + (0.0,)
-            elif (not fit_offset) and fit_scale:
-                p0 = base + (scale_guess,)
-            else:
-                p0 = base
-
-        if bounds is None:
-            lo = [1e6, 1e6]
-            hi = [1e12, 1e12]
-            if fit_offset:
-                lo.append(-0.5); hi.append(0.5)
-            if fit_scale:
-                lo.append(-np.inf); hi.append(np.inf)
-            bounds = (tuple(lo), tuple(hi))
-
-        popt, pcov = curve_fit(
-            model, offset_charges, cq_measured,
-            p0=p0, bounds=bounds, maxfev=4000,
-        )
-        perr = np.sqrt(np.diag(pcov))
-        cq_fit = model(offset_charges, *popt)
-
-        e_j = float(popt[0]); e_c = float(popt[1])
-        idx = 2
-        n_g0 = 0.0
-        n_g0_err = 0.0
-        if fit_offset:
-            n_g0 = float(popt[idx]); n_g0_err = float(perr[idx]); idx += 1
-        if fit_scale:
-            scale = float(popt[idx]); scale_err = float(perr[idx])
+            ej0, ec0, ng0_0 = self.e_j_hz, self.e_c_hz, 0.0
         else:
-            scale = float(fixed_scale); scale_err = 0.0
+            p0 = list(p0)
+            ej0, ec0 = p0[0], p0[1]
+            ng0_0 = p0[2] if (fit_offset and len(p0) > 2) else 0.0
+            if fit_scale:
+                scale_guess = (p0[-1] if len(p0) >=
+                               (3 + int(fit_offset)) else 1.0)
+            else:
+                scale_guess = fixed_scale
+
+        scale0 = scale_guess if fit_scale else fixed_scale
+
+        m = Minuit(cost, e_j_hz=ej0, e_c_hz=ec0,
+                   n_g0=ng0_0, scale=scale0)
+        m.errordef = Minuit.LEAST_SQUARES
+        m.print_level = print_level
+
+        # Step sizes: O(parameter magnitude) for energies, O(0.01) for
+        # n_g0, O(0.1 * scale) for scale. iminuit picks reasonable
+        # defaults but explicit hints help on this multi-scale problem.
+        m.errors['e_j_hz'] = max(abs(ej0) * 0.05, 1e7)
+        m.errors['e_c_hz'] = max(abs(ec0) * 0.05, 1e6)
+        m.errors['n_g0'] = 0.01
+        m.errors['scale'] = max(abs(scale0) * 0.1, 1e-3)
+
+        m.limits['e_j_hz'] = e_j_bounds_hz
+        m.limits['e_c_hz'] = e_c_bounds_hz
+        m.limits['n_g0'] = n_g0_bounds
+        m.limits['scale'] = scale_bounds
+
+        m.fixed['n_g0'] = not fit_offset
+        m.fixed['scale'] = not fit_scale
+        if not fit_offset:
+            m.values['n_g0'] = 0.0
+        if not fit_scale:
+            m.values['scale'] = fixed_scale
+
+        # Coarse 2D pre-scan in (ratio, E_C) to locate the chi² basin
+        # before iminuit refines locally. The C_Q(n_g) chi² landscape
+        # has a shallow valley along the (E_J, E_C) "weak shape"
+        # direction; without this scan iminuit can settle in a
+        # different basin from the global minimum depending on noise.
+        ratio_grid = np.geomspace(2.0, 50.0, 11)
+        ec_grid = np.geomspace(max(e_c_bounds_hz[0], ec0 / 3),
+                               min(e_c_bounds_hz[1], ec0 * 3), 7)
+        best_fval = np.inf
+        best_start = (ej0, ec0, ng0_0, scale0)
+        for ec_try in ec_grid:
+            for ratio in ratio_grid:
+                ej_try = ec_try * ratio
+                if not (e_j_bounds_hz[0] <= ej_try <= e_j_bounds_hz[1]):
+                    continue
+                f = cost(ej_try, ec_try, ng0_0, scale0)
+                if f < best_fval:
+                    best_fval = f
+                    best_start = (ej_try, ec_try, ng0_0, scale0)
+        m.values['e_j_hz'] = float(np.clip(best_start[0], *e_j_bounds_hz))
+        m.values['e_c_hz'] = float(np.clip(best_start[1], *e_c_bounds_hz))
+        m.values['n_g0'] = ng0_0
+        if fit_scale:
+            m.values['scale'] = scale0
+
+        # MIGRAD + HESSE refinement.
+        m.migrad()
+        m.hesse()
+
+        e_j = float(m.values['e_j_hz'])
+        e_c = float(m.values['e_c_hz'])
+        n_g0 = float(m.values['n_g0'])
+        scale = float(m.values['scale'])
+
+        cq_fit = model_eval(e_j, e_c, n_g0, scale)
+
         errs = {
-            'e_j_hz': float(perr[0]), 'e_c_hz': float(perr[1]),
-            'n_g0': n_g0_err, 'scale': scale_err,
+            'e_j_hz': float(m.errors['e_j_hz']),
+            'e_c_hz': float(m.errors['e_c_hz']),
+            'n_g0': float(m.errors['n_g0']) if fit_offset else 0.0,
+            'scale': float(m.errors['scale']) if fit_scale else 0.0,
         }
 
         return {
@@ -1302,7 +1361,8 @@ class QPD:
             'errors': errs,
             'cq_fit': cq_fit,
             'residuals': cq_measured - cq_fit,
-            'pcov': pcov,
+            'fval': float(m.fval),
+            'minuit': m,
         }
 
     def plot_quantum_capacitance(self, offset_charges=None, c_g_f=None,

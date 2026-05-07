@@ -45,7 +45,11 @@ def main():
     ng0_true = 0.05
     _, cq_truth = qpd.compute_quantum_capacitance(ng - ng0_true)
     rng = np.random.default_rng(42)
-    noise_amp = 0.02 * np.max(np.abs(cq_truth))
+    # 0.05 % noise: in the regime where the chi^2 valley is narrow
+    # enough that absolute (E_J, E_C) recovery is meaningful. At 1 %
+    # noise the valley walls flatten and only the ratio is identifiable
+    # without an external constraint on E_C.
+    noise_amp = 0.0005 * np.max(np.abs(cq_truth))
     cq_meas = cq_truth + rng.normal(0, noise_amp, size=ng.size)
 
     guess = QPD(e_j_hz=1.1 * e_j_hz, e_c_hz=0.9 * e_c_hz)
