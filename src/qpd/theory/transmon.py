@@ -1534,6 +1534,8 @@ class QPD:
             sig_ej = errs.get('e_j_hz', 0.0)
             sig_ec = errs.get('e_c_hz', 0.0)
             sig_ng0 = errs.get('n_g0', 0.0)
+            sig_bl = errs.get('baseline', 0.0)
+            baseline = fit_result.get('baseline', 0.0)
             title_parts = [
                 rf"$E_J/E_C={fit_result['ej_ec_ratio']:.2f}"
                 rf"\pm{sig_ratio:.2f}$",
@@ -1544,6 +1546,13 @@ class QPD:
                 rf"$n_{{g0}}={fit_result['n_g0']:+.3f}"
                 rf"\pm{sig_ng0:.3f}$",
             ]
+            # Only annotate baseline when it was actually fit (nonzero
+            # uncertainty) or when the user supplied a nonzero fixed
+            # value — otherwise it just clutters the title.
+            if sig_bl > 0 or baseline != 0:
+                title_parts.append(
+                    rf"$y_0=({baseline:+.3g}\pm{sig_bl:.2g})$ {units}"
+                )
             ax_top.set_title(', '.join(title_parts), fontsize=7)
             ax_top.legend(loc='best', fontsize=7)
             ax_top.minorticks_on()
