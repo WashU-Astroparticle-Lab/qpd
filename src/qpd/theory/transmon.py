@@ -1436,7 +1436,8 @@ class QPD:
                                  fit_result, ratio_grid=None,
                                  n_ratio=25, span_factor=2.0,
                                  parity='odd', charge_cutoff=18,
-                                 cq_sigma=None, print_level=0):
+                                 cq_sigma=None, print_level=0,
+                                 progress=False):
         """
         Profile-likelihood scan for the E_J/E_C ratio.
 
@@ -1472,6 +1473,10 @@ class QPD:
             (i.e. a factor of 2 each side).
         parity, charge_cutoff, cq_sigma, print_level
             As in `fit_quantum_capacitance`.
+        progress : bool, optional
+            If True, display a tqdm progress bar over the ratio grid.
+            Requires the `tqdm` package (only imported when used).
+            Default False.
 
         Returns
         -------
@@ -1559,7 +1564,15 @@ class QPD:
                 return float(np.sum(resid * resid))
             return cost
 
-        for i, r in enumerate(ratio_grid):
+        if progress:
+            from tqdm.auto import tqdm
+            iterator = tqdm(enumerate(ratio_grid),
+                            total=len(ratio_grid),
+                            desc='profile_ratio_likelihood')
+        else:
+            iterator = enumerate(ratio_grid)
+
+        for i, r in iterator:
             cost = _make_cost(float(r))
 
             m = Minuit(cost, e_c_hz=e_c_fit, n_g0=ng0_fit,
