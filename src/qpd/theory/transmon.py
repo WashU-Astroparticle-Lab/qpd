@@ -1221,7 +1221,9 @@ class QPD:
         -------
         result : dict
             Keys: 'e_j_hz', 'e_c_hz', 'n_g0', 'scale', 'ej_ec_ratio',
-            'errors' (1σ HESSE uncertainties for each parameter),
+            'errors' (1σ HESSE uncertainties for each parameter,
+            plus 'ej_ec_ratio' propagated from the (E_J, E_C)
+            covariance),
             'cq_fit' (model evaluated at offset_charges),
             'residuals' (cq_measured - cq_fit),
             'fval' (final chi² value),
@@ -1345,11 +1347,26 @@ class QPD:
 
         cq_fit = model_eval(e_j, e_c, n_g0, scale)
 
+        sig_ej = float(m.errors['e_j_hz'])
+        sig_ec = float(m.errors['e_c_hz'])
+
+        # Propagate the (E_J, E_C) HESSE covariance to E_J/E_C:
+        # σ_r² = (σ_J/E_C)² + (E_J σ_C / E_C²)² − 2 (E_J/E_C³) cov_JC.
+        try:
+            cov_jc = float(m.covariance['e_j_hz', 'e_c_hz'])
+        except Exception:
+            cov_jc = 0.0
+        ratio_var = ((sig_ej / e_c) ** 2
+                     + (e_j * sig_ec / e_c ** 2) ** 2
+                     - 2.0 * (e_j / e_c ** 3) * cov_jc)
+        sig_ratio = float(np.sqrt(max(ratio_var, 0.0)))
+
         errs = {
-            'e_j_hz': float(m.errors['e_j_hz']),
-            'e_c_hz': float(m.errors['e_c_hz']),
+            'e_j_hz': sig_ej,
+            'e_c_hz': sig_ec,
             'n_g0': float(m.errors['n_g0']) if fit_offset else 0.0,
             'scale': float(m.errors['scale']) if fit_scale else 0.0,
+            'ej_ec_ratio': sig_ratio,
         }
 
         return {
@@ -1462,11 +1479,20 @@ class QPD:
             ax_top.plot(offset_charges, cq_fit, '-',
                         color='tab:red', linewidth=2, label='fit')
             ax_top.set_ylabel(rf'$C_Q$ [{units}]')
+            errs = fit_result.get('errors', {}) or {}
+            sig_ratio = errs.get('ej_ec_ratio', 0.0)
+            sig_ej = errs.get('e_j_hz', 0.0)
+            sig_ec = errs.get('e_c_hz', 0.0)
+            sig_ng0 = errs.get('n_g0', 0.0)
             title_parts = [
-                f"$E_J/E_C={fit_result['ej_ec_ratio']:.2f}$",
-                f"$E_J={fit_result['e_j_hz']/1e9:.3f}$ GHz",
-                f"$E_C={fit_result['e_c_hz']/1e9:.4f}$ GHz",
-                f"$n_{{g0}}={fit_result['n_g0']:+.3f}$",
+                rf"$E_J/E_C={fit_result['ej_ec_ratio']:.2f}"
+                rf"\pm{sig_ratio:.2f}$",
+                rf"$E_J=({fit_result['e_j_hz']/1e9:.3f}"
+                rf"\pm{sig_ej/1e9:.3f})$ GHz",
+                rf"$E_C=({fit_result['e_c_hz']/1e9:.4f}"
+                rf"\pm{sig_ec/1e9:.4f})$ GHz",
+                rf"$n_{{g0}}={fit_result['n_g0']:+.3f}"
+                rf"\pm{sig_ng0:.3f}$",
             ]
             ax_top.set_title(', '.join(title_parts), fontsize=7)
             ax_top.legend(loc='best', fontsize=7)
