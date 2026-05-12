@@ -1167,7 +1167,11 @@ class QPD:
                                 n_g0_bounds=(-0.5, 0.5),
                                 scale_bounds=(-np.inf, np.inf),
                                 baseline_bounds=(-np.inf, np.inf),
-                                cq_sigma=None, print_level=0):
+                                cq_sigma=None, print_level=0,
+                                profile_ratio=False,
+                                profile_n_ratio=15,
+                                profile_span_factor=1.5,
+                                profile_progress=False):
         """
         Fit a measured C_Q(n_g) trace to extract E_J, E_C, n_g0, scale,
         and optionally a constant y-offset `baseline`.
@@ -1237,6 +1241,19 @@ class QPD:
             values; only the reported errors and chi² scale).
         print_level : int, optional
             iminuit verbosity (0 silent, 1 short, 2 detailed). Default 0.
+        profile_ratio : bool, optional
+            If True, after the joint MIGRAD fit also runs
+            `profile_ratio_likelihood` and stores the result under
+            `result['ratio_profile']`. Provides honest asymmetric
+            1σ/2σ/3σ confidence intervals on E_J/E_C that account
+            for the shallow-valley degeneracy, which HESSE
+            underestimates. Default False.
+        profile_n_ratio, profile_span_factor : optional
+            Forwarded to `profile_ratio_likelihood` as `n_ratio` and
+            `span_factor`. Defaults 15 and 1.5.
+        profile_progress : bool, optional
+            Show a tqdm progress bar for the profile scan. Default
+            False.
 
         Returns
         -------
@@ -1250,7 +1267,9 @@ class QPD:
             'residuals' (cq_measured - cq_fit),
             'fval' (final chi² value),
             'minuit' (the underlying iminuit.Minuit instance, for
-            inspection of covariance, MINOS errors, contours, etc.).
+            inspection of covariance, MINOS errors, contours, etc.),
+            'ratio_profile' (output of `profile_ratio_likelihood`,
+            present only when `profile_ratio=True`).
         """
         from iminuit import Minuit
 
@@ -1418,7 +1437,7 @@ class QPD:
             'ej_ec_ratio': sig_ratio,
         }
 
-        return {
+        result = {
             'e_j_hz': e_j,
             'e_c_hz': e_c,
             'n_g0': n_g0,
@@ -1431,6 +1450,19 @@ class QPD:
             'fval': float(m.fval),
             'minuit': m,
         }
+
+        if profile_ratio:
+            result['ratio_profile'] = self.profile_ratio_likelihood(
+                offset_charges, cq_measured, result,
+                n_ratio=profile_n_ratio,
+                span_factor=profile_span_factor,
+                parity=parity,
+                charge_cutoff=min(charge_cutoff, 10),
+                cq_sigma=cq_sigma,
+                progress=profile_progress,
+            )
+
+        return result
 
     def profile_ratio_likelihood(self, offset_charges, cq_measured,
                                  fit_result, ratio_grid=None,
@@ -1716,7 +1748,7 @@ class QPD:
 
     def plot_capacitance_fit(self, offset_charges, cq_measured,
                              fit_result, units='Hz', figsize=(4, 4),
-                             ratio_profile=None):
+                             use_profile=True):
         """
         Plot a measured C_Q trace with the best-fit overlay and residuals.
 
@@ -1734,6 +1766,12 @@ class QPD:
             the input was in absolute capacitance units.
         figsize : tuple, optional
             Figure size, default (4, 4).
+        use_profile : bool, optional
+            If True (default) and `fit_result['ratio_profile']` is
+            present, display the E_J/E_C best fit and asymmetric 1σ
+            interval from the profile-likelihood scan. If False, or
+            if no profile is attached, fall back to the joint-fit
+            value with symmetric HESSE 1σ.
 
         Returns
         -------
@@ -1756,6 +1794,8 @@ class QPD:
             ax_top.set_ylabel(rf'$C_Q$ [{units}]')
             errs = fit_result.get('errors', {}) or {}
             scale_was_free = errs.get('scale', 0.0) > 0
+            ratio_profile = (fit_result.get('ratio_profile')
+                             if use_profile else None)
             title_parts = []
             if scale_was_free:
                 # Scale free → individual (E_J, E_C) are degenerate
