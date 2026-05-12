@@ -1763,7 +1763,11 @@ class QPD:
         units : str, optional
             Unit string used to label the y-axis of both panels. Default
             'Hz' (intrinsic curvature). Use e.g. 'F', 'fF', or 'aF' when
-            the input was in absolute capacitance units.
+            the input was in absolute capacitance units. When the fit
+            had `fit_scale=True` or `fit_baseline=True`, the y-axis is
+            silently relabeled 'arb. u.' regardless of this value,
+            since those modes concede that the absolute amplitude and
+            offset of cq_measured are not calibrated.
         figsize : tuple, optional
             Figure size, default (4, 4).
         use_profile : bool, optional
@@ -1791,9 +1795,12 @@ class QPD:
                         markersize=3, color='black', label='measured')
             ax_top.plot(offset_charges, cq_fit, '-',
                         color='tab:red', linewidth=2, label='fit')
-            ax_top.set_ylabel(rf'$C_Q$ [{units}]')
             errs = fit_result.get('errors', {}) or {}
             scale_was_free = errs.get('scale', 0.0) > 0
+            baseline_was_free = errs.get('baseline', 0.0) > 0
+            y_units = ('arb. u.' if (scale_was_free or baseline_was_free)
+                       else units)
+            ax_top.set_ylabel(rf'$C_Q$ [{y_units}]')
             ratio_profile = (fit_result.get('ratio_profile')
                              if use_profile else None)
             title_parts = []
@@ -1838,7 +1845,7 @@ class QPD:
                         markersize=3, color='tab:gray')
             ax_bot.axhline(0, color='black', linewidth=0.8, alpha=0.6)
             ax_bot.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
-            ax_bot.set_ylabel(f'residual [{units}]')
+            ax_bot.set_ylabel(f'residual [{y_units}]')
             ax_bot.minorticks_on()
             ax_bot.grid(alpha=0.3)
 
