@@ -1171,7 +1171,8 @@ class QPD:
                                 profile_ratio=False,
                                 profile_n_ratio=15,
                                 profile_span_factor=1.5,
-                                profile_progress=False):
+                                profile_progress=False,
+                                fixed_ej_ec_ratio=None):
         """
         Fit a measured C_Q(n_g) trace to extract E_J, E_C, n_g0, scale,
         and optionally a constant y-offset `baseline`.
@@ -1254,6 +1255,22 @@ class QPD:
         profile_progress : bool, optional
             Show a tqdm progress bar for the profile scan. Default
             False.
+        fixed_ej_ec_ratio : float, optional
+            If given, constrain the fit to `E_J = fixed_ej_ec_ratio
+            · E_C` — i.e. fit only `E_C` and the active nuisance
+            parameters, with the ratio held fixed at this value.
+            Useful when an external measurement (e.g. anharmonicity
+            from spectroscopy) pins the ratio, for sensitivity
+            studies, or for externally scanning the ratio. Note:
+            this only removes the shape ambiguity along the ratio
+            direction — when `fit_scale=True` the remaining
+            (E_C, scale) amplitude degeneracy is unaffected, so
+            individual `E_C` becomes identifiable only when scale is
+            also fixed (`fit_scale=False`) or otherwise constrained.
+            `errors['ej_ec_ratio']` is reported as 0 in this mode;
+            `errors['e_j_hz']` is propagated from `errors['e_c_hz']`
+            as |ratio| · σ_E_C. `profile_ratio=True` is incompatible
+            with this option.
 
         Returns
         -------
@@ -1278,6 +1295,12 @@ class QPD:
 
         if parity not in ('odd', 'even'):
             raise ValueError(f"Invalid parity: {parity!r}")
+
+        if fixed_ej_ec_ratio is not None and profile_ratio:
+            raise ValueError(
+                "profile_ratio=True is incompatible with "
+                "fixed_ej_ec_ratio (the ratio is held fixed)."
+            )
 
         if cq_sigma is None:
             sigma = max(np.std(cq_measured) * 1e-2,
@@ -1341,6 +1364,17 @@ class QPD:
 
         scale0 = scale_guess if fit_scale else fixed_scale
         baseline0 = baseline_guess if fit_baseline else fixed_baseline
+
+        if fixed_ej_ec_ratio is not None:
+            return self._fit_quantum_capacitance_constrained_ratio(
+                offset_charges, cq_measured, cost, model_eval, sigma,
+                fixed_ej_ec_ratio,
+                ec0, ng0_0, scale0, baseline0,
+                fit_offset, fit_scale, fit_baseline,
+                fixed_scale, fixed_baseline,
+                e_c_bounds_hz, n_g0_bounds, scale_bounds,
+                baseline_bounds, print_level,
+            )
 
         m = Minuit(cost, e_j_hz=ej0, e_c_hz=ec0,
                    n_g0=ng0_0, scale=scale0, baseline=baseline0)
@@ -1463,6 +1497,118 @@ class QPD:
             )
 
         return result
+
+    def _fit_quantum_capacitance_constrained_ratio(
+        self, offset_charges, cq_measured, cost, model_eval, sigma,
+        ratio, ec0, ng0_0, scale0, baseline0,
+        fit_offset, fit_scale, fit_baseline,
+        fixed_scale, fixed_baseline,
+        e_c_bounds_hz, n_g0_bounds, scale_bounds,
+        baseline_bounds, print_level,
+    ):
+        """
+        Inner helper for `fit_quantum_capacitance(fixed_ej_ec_ratio=…)`.
+
+        Reparametrises (E_J, E_C) → (E_C) with E_J = ratio · E_C, and
+        runs the same MIGRAD + HESSE pipeline on the reduced parameter
+        set. The returned dict matches the shape of the unconstrained
+        fit; `ej_ec_ratio` is reported as `ratio` exactly and
+        `errors['ej_ec_ratio'] = 0`. `errors['e_j_hz']` is the
+        linearly-propagated |ratio| · σ_E_C.
+        """
+        from iminuit import Minuit
+
+        r = float(ratio)
+
+        def cost_c(e_c_hz, n_g0, scale, baseline):
+            return cost(r * e_c_hz, e_c_hz, n_g0, scale, baseline)
+
+        m = Minuit(cost_c, e_c_hz=ec0, n_g0=ng0_0,
+                   scale=scale0, baseline=baseline0)
+        m.errordef = Minuit.LEAST_SQUARES
+        m.print_level = print_level
+
+        m.errors['e_c_hz'] = max(abs(ec0) * 0.05, 1e6)
+        m.errors['n_g0'] = 0.01
+        m.errors['scale'] = max(abs(scale0) * 0.1, 1e-3)
+        m.errors['baseline'] = max(abs(baseline0) * 0.1,
+                                   np.std(cq_measured) * 1e-2, 1e-9)
+
+        m.limits['e_c_hz'] = e_c_bounds_hz
+        m.limits['n_g0'] = n_g0_bounds
+        m.limits['scale'] = scale_bounds
+        m.limits['baseline'] = baseline_bounds
+
+        m.fixed['n_g0'] = not fit_offset
+        m.fixed['scale'] = not fit_scale
+        m.fixed['baseline'] = not fit_baseline
+        if not fit_offset:
+            m.values['n_g0'] = 0.0
+        if not fit_scale:
+            m.values['scale'] = fixed_scale
+        if not fit_baseline:
+            m.values['baseline'] = fixed_baseline
+
+        # 1D pre-scan over E_C × n_g0 with linear scale/baseline at
+        # their initial guesses. Cheaper than the unconstrained
+        # 3D scan; we already have the ratio pinned.
+        ec_grid = np.geomspace(max(e_c_bounds_hz[0], ec0 / 3),
+                               min(e_c_bounds_hz[1], ec0 * 3), 7)
+        if fit_offset:
+            ng0_grid = np.linspace(max(n_g0_bounds[0], -0.45),
+                                   min(n_g0_bounds[1], 0.45), 7)
+        else:
+            ng0_grid = np.array([ng0_0])
+        best_fval = np.inf
+        best = (ec0, ng0_0)
+        for ec_try in ec_grid:
+            for ng0_try in ng0_grid:
+                f = cost_c(ec_try, float(ng0_try), scale0, baseline0)
+                if f < best_fval:
+                    best_fval = f
+                    best = (ec_try, float(ng0_try))
+        m.values['e_c_hz'] = float(np.clip(best[0], *e_c_bounds_hz))
+        if fit_offset:
+            m.values['n_g0'] = best[1]
+
+        m.migrad()
+        m.hesse()
+
+        e_c = float(m.values['e_c_hz'])
+        e_j = r * e_c
+        n_g0 = float(m.values['n_g0'])
+        scale = float(m.values['scale'])
+        baseline = float(m.values['baseline'])
+
+        sig_ec = float(m.errors['e_c_hz'])
+        sig_ej = abs(r) * sig_ec  # E_J = r·E_C, r exact
+
+        errs = {
+            'e_j_hz': sig_ej,
+            'e_c_hz': sig_ec,
+            'n_g0': float(m.errors['n_g0']) if fit_offset else 0.0,
+            'scale': float(m.errors['scale']) if fit_scale else 0.0,
+            'baseline': (float(m.errors['baseline'])
+                         if fit_baseline else 0.0),
+            'ej_ec_ratio': 0.0,
+        }
+
+        cq_fit = model_eval(e_j, e_c, n_g0, scale, baseline)
+        residuals = cq_measured - cq_fit
+
+        return {
+            'e_j_hz': e_j,
+            'e_c_hz': e_c,
+            'n_g0': n_g0,
+            'scale': scale,
+            'baseline': baseline,
+            'ej_ec_ratio': r,
+            'errors': errs,
+            'cq_fit': cq_fit,
+            'residuals': residuals,
+            'fval': float(m.fval),
+            'minuit': m,
+        }
 
     def profile_ratio_likelihood(self, offset_charges, cq_measured,
                                  fit_result, ratio_grid=None,
