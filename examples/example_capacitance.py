@@ -57,20 +57,48 @@ def main():
         ng, cq_meas, parity='odd', fit_scale=False, fixed_scale=1.0,
     )
 
+    err = fit['errors']
     print('--- Fit result -----------------------------------------')
-    print(f"  E_J  fitted = {fit['e_j_hz']/1e9:.4f} GHz   "
+    print(f"  E_J  = ({fit['e_j_hz']/1e9:.4f} "
+          f"± {err['e_j_hz']/1e9:.4f}) GHz   "
           f"(true {e_j_hz/1e9:.4f})")
-    print(f"  E_C  fitted = {fit['e_c_hz']/1e9:.4f} GHz   "
+    print(f"  E_C  = ({fit['e_c_hz']/1e9:.4f} "
+          f"± {err['e_c_hz']/1e9:.4f}) GHz   "
           f"(true {e_c_hz/1e9:.4f})")
-    print(f"  E_J/E_C     = {fit['ej_ec_ratio']:.3f}   "
+    print(f"  E_J/E_C = {fit['ej_ec_ratio']:.3f} "
+          f"± {err['ej_ec_ratio']:.3f}   "
           f"(true {e_j_hz/e_c_hz:.3f})")
-    print(f"  n_g0 fitted = {fit['n_g0']:+.4f}        "
+    print(f"  n_g0 = {fit['n_g0']:+.4f} ± {err['n_g0']:.4f}        "
           f"(true {ng0_true:+.4f})")
-    print(f"  scale       = {fit['scale']:.4g}")
+    print(f"  scale = {fit['scale']:.4g} ± {err['scale']:.4g}")
     print('--------------------------------------------------------')
 
     fig2, _ = qpd.plot_capacitance_fit(ng, cq_meas, fit)
     fig2.savefig('cq_fit.png', dpi=150, bbox_inches='tight')
+
+    # ------------------------------------------------------------------
+    # 2b. Fit with an unknown DC baseline
+    # ------------------------------------------------------------------
+    # Add an arbitrary DC offset to the synthetic trace to mimic an
+    # uncalibrated readout baseline, then let the fit recover it.
+    y0_true = 0.10 * np.max(np.abs(cq_truth))
+    cq_meas_off = cq_meas + y0_true
+
+    fit_bl = guess.fit_quantum_capacitance(
+        ng, cq_meas_off, parity='odd',
+        fit_scale=True, fit_baseline=True,
+    )
+    err_bl = fit_bl['errors']
+    print('--- Fit with unknown baseline --------------------------')
+    print(f"  E_J/E_C  = {fit_bl['ej_ec_ratio']:.3f} "
+          f"± {err_bl['ej_ec_ratio']:.3f}   "
+          f"(true {e_j_hz/e_c_hz:.3f})")
+    print(f"  n_g0     = {fit_bl['n_g0']:+.4f} ± "
+          f"{err_bl['n_g0']:.4f}   (true {ng0_true:+.4f})")
+    print(f"  scale    = {fit_bl['scale']:.4g} ± {err_bl['scale']:.4g}")
+    print(f"  baseline = {fit_bl['baseline']:+.4g} ± "
+          f"{err_bl['baseline']:.4g}   (true {y0_true:+.4g})")
+    print('--------------------------------------------------------')
 
     # ------------------------------------------------------------------
     # 3. Readout chain: Δφ -> Δf_r -> ΔC_Q

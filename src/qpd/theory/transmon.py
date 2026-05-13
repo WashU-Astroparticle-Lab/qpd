@@ -1161,22 +1161,33 @@ class QPD:
                                 parity='odd', p0=None,
                                 charge_cutoff=18, fit_offset=True,
                                 fit_scale=True, fixed_scale=1.0,
+                                fit_baseline=False, fixed_baseline=0.0,
                                 e_j_bounds_hz=(0.01e9, 100e9),
                                 e_c_bounds_hz=(0.01e9, 100e9),
                                 n_g0_bounds=(-0.5, 0.5),
                                 scale_bounds=(-np.inf, np.inf),
-                                cq_sigma=None, print_level=0):
+                                baseline_bounds=(-np.inf, np.inf),
+                                cq_sigma=None, print_level=0,
+                                profile_ratio=False,
+                                profile_n_ratio=15,
+                                profile_span_factor=1.5,
+                                profile_progress=False):
         """
-        Fit a measured C_Q(n_g) trace to extract E_J, E_C, n_g0, scale.
+        Fit a measured C_Q(n_g) trace to extract E_J, E_C, n_g0, scale,
+        and optionally a constant y-offset `baseline`.
 
         Uses iminuit (MIGRAD + HESSE) on a least-squares cost. The model
         evaluates the *intrinsic* second derivative -∂²E[Hz]/∂n_g² for
         the requested parity using the numeric Hamiltonian (same
-        primitive as `compute_quantum_capacitance`). An overall
-        multiplicative `scale` absorbs the prefactor that relates the
-        dimensionless intrinsic curvature to whatever units the user
+        primitive as `compute_quantum_capacitance`). The full model is
+
+            cq_meas ≈ scale · f_intrinsic(n_g − n_g0; E_J, E_C) + baseline
+
+        where the multiplicative `scale` absorbs the prefactor relating
+        the dimensionless intrinsic curvature to whatever units the user
         supplied (Farads if cq_measured is in F, etc.), so a known gate
-        capacitance is *not* required.
+        capacitance is *not* required, and the additive `baseline`
+        absorbs any constant DC offset in the readout chain.
 
         Parameters
         ----------
@@ -1202,13 +1213,27 @@ class QPD:
             ratio fit be tight.
         fixed_scale : float, optional
             Scale used when `fit_scale=False`. Default 1.0.
+        fit_baseline : bool, optional
+            If True, fit an additive constant `baseline` that absorbs
+            an unknown DC offset on cq_measured. Default False (no
+            offset, i.e. `baseline = fixed_baseline = 0`). The
+            baseline is robustly identified when fit jointly with
+            `scale`, but in the deep-transmon limit (E_J/E_C ≳ 10)
+            f_intrinsic becomes nearly sinusoidal and the DC level is
+            correlated with scale × charge-dispersion(E_J, E_C); the
+            (E_J, E_C) ratio can then drift more than in a
+            baseline-fixed fit. If you have an independent baseline
+            estimate, prefer `fit_baseline=False, fixed_baseline=...`.
+        fixed_baseline : float, optional
+            Baseline used when `fit_baseline=False`. Default 0.0.
         e_j_bounds_hz, e_c_bounds_hz : tuple of (lo, hi), optional
             Hard bounds on E_J and E_C in Hz. Default (0.01 GHz,
             100 GHz) for both — covers essentially all useful
             experimental QPD/transmon parameter space.
-        n_g0_bounds, scale_bounds : tuple of (lo, hi), optional
-            Bounds on n_g0 (default ±0.5) and scale (default
-            unbounded). Pass `(None, None)` to remove a bound.
+        n_g0_bounds, scale_bounds, baseline_bounds : tuple of (lo, hi)
+            Bounds on n_g0 (default ±0.5), scale (default unbounded),
+            and baseline (default unbounded). Pass `(None, None)` to
+            remove a bound.
         cq_sigma : float or array_like, optional
             Per-point uncertainty on cq_measured used to weight the
             least-squares cost. Defaults to a constant value derived
@@ -1216,17 +1241,35 @@ class QPD:
             values; only the reported errors and chi² scale).
         print_level : int, optional
             iminuit verbosity (0 silent, 1 short, 2 detailed). Default 0.
+        profile_ratio : bool, optional
+            If True, after the joint MIGRAD fit also runs
+            `profile_ratio_likelihood` and stores the result under
+            `result['ratio_profile']`. Provides honest asymmetric
+            1σ/2σ/3σ confidence intervals on E_J/E_C that account
+            for the shallow-valley degeneracy, which HESSE
+            underestimates. Default False.
+        profile_n_ratio, profile_span_factor : optional
+            Forwarded to `profile_ratio_likelihood` as `n_ratio` and
+            `span_factor`. Defaults 15 and 1.5.
+        profile_progress : bool, optional
+            Show a tqdm progress bar for the profile scan. Default
+            False.
 
         Returns
         -------
         result : dict
-            Keys: 'e_j_hz', 'e_c_hz', 'n_g0', 'scale', 'ej_ec_ratio',
-            'errors' (1σ HESSE uncertainties for each parameter),
+            Keys: 'e_j_hz', 'e_c_hz', 'n_g0', 'scale', 'baseline',
+            'ej_ec_ratio',
+            'errors' (1σ HESSE uncertainties for each parameter,
+            plus 'ej_ec_ratio' propagated from the (E_J, E_C)
+            covariance),
             'cq_fit' (model evaluated at offset_charges),
             'residuals' (cq_measured - cq_fit),
             'fval' (final chi² value),
             'minuit' (the underlying iminuit.Minuit instance, for
-            inspection of covariance, MINOS errors, contours, etc.).
+            inspection of covariance, MINOS errors, contours, etc.),
+            'ratio_profile' (output of `profile_ratio_likelihood`,
+            present only when `profile_ratio=True`).
         """
         from iminuit import Minuit
 
@@ -1257,35 +1300,50 @@ class QPD:
             )
             return cq_o if parity == 'odd' else cq_e
 
-        def model_eval(e_j_hz, e_c_hz, n_g0, scale):
+        def model_eval(e_j_hz, e_c_hz, n_g0, scale, baseline):
             return scale * _intrinsic_cq(offset_charges - n_g0,
-                                         e_j_hz, e_c_hz)
+                                         e_j_hz, e_c_hz) + baseline
 
-        def cost(e_j_hz, e_c_hz, n_g0, scale):
-            resid = (model_eval(e_j_hz, e_c_hz, n_g0, scale)
+        def cost(e_j_hz, e_c_hz, n_g0, scale, baseline):
+            resid = (model_eval(e_j_hz, e_c_hz, n_g0, scale, baseline)
                      - cq_measured) / sigma
             return float(np.sum(resid * resid))
 
         if p0 is None:
             cq0 = _intrinsic_cq(offset_charges, self.e_j_hz, self.e_c_hz)
             denom = np.max(np.abs(cq0))
-            scale_guess = (np.max(np.abs(cq_measured)) / denom
-                           if denom > 0 else 1.0)
+            if fit_baseline:
+                # Use peak-to-peak amplitude (baseline absorbs the DC),
+                # and seed baseline at <cq_measured> − scale·<cq0>.
+                amp_data = 0.5 * (np.max(cq_measured)
+                                  - np.min(cq_measured))
+                scale_guess = (amp_data / denom if denom > 0 else 1.0)
+                baseline_guess = float(np.mean(cq_measured)
+                                       - scale_guess * np.mean(cq0))
+            else:
+                amp_data = np.max(np.abs(cq_measured))
+                scale_guess = (amp_data / denom if denom > 0 else 1.0)
+                baseline_guess = fixed_baseline
             ej0, ec0, ng0_0 = self.e_j_hz, self.e_c_hz, 0.0
         else:
             p0 = list(p0)
             ej0, ec0 = p0[0], p0[1]
-            ng0_0 = p0[2] if (fit_offset and len(p0) > 2) else 0.0
+            idx = 2
+            ng0_0 = p0[idx] if (fit_offset and len(p0) > idx) else 0.0
+            if fit_offset:
+                idx += 1
+            scale_guess = (p0[idx] if (fit_scale and len(p0) > idx)
+                           else fixed_scale)
             if fit_scale:
-                scale_guess = (p0[-1] if len(p0) >=
-                               (3 + int(fit_offset)) else 1.0)
-            else:
-                scale_guess = fixed_scale
+                idx += 1
+            baseline_guess = (p0[idx] if (fit_baseline and len(p0) > idx)
+                              else fixed_baseline)
 
         scale0 = scale_guess if fit_scale else fixed_scale
+        baseline0 = baseline_guess if fit_baseline else fixed_baseline
 
         m = Minuit(cost, e_j_hz=ej0, e_c_hz=ec0,
-                   n_g0=ng0_0, scale=scale0)
+                   n_g0=ng0_0, scale=scale0, baseline=baseline0)
         m.errordef = Minuit.LEAST_SQUARES
         m.print_level = print_level
 
@@ -1296,18 +1354,24 @@ class QPD:
         m.errors['e_c_hz'] = max(abs(ec0) * 0.05, 1e6)
         m.errors['n_g0'] = 0.01
         m.errors['scale'] = max(abs(scale0) * 0.1, 1e-3)
+        m.errors['baseline'] = max(abs(baseline0) * 0.1,
+                                   np.std(cq_measured) * 1e-2, 1e-9)
 
         m.limits['e_j_hz'] = e_j_bounds_hz
         m.limits['e_c_hz'] = e_c_bounds_hz
         m.limits['n_g0'] = n_g0_bounds
         m.limits['scale'] = scale_bounds
+        m.limits['baseline'] = baseline_bounds
 
         m.fixed['n_g0'] = not fit_offset
         m.fixed['scale'] = not fit_scale
+        m.fixed['baseline'] = not fit_baseline
         if not fit_offset:
             m.values['n_g0'] = 0.0
         if not fit_scale:
             m.values['scale'] = fixed_scale
+        if not fit_baseline:
+            m.values['baseline'] = fixed_baseline
 
         # Coarse 2D pre-scan in (ratio, E_C) to locate the chi² basin
         # before iminuit refines locally. The C_Q(n_g) chi² landscape
@@ -1318,21 +1382,24 @@ class QPD:
         ec_grid = np.geomspace(max(e_c_bounds_hz[0], ec0 / 3),
                                min(e_c_bounds_hz[1], ec0 * 3), 7)
         best_fval = np.inf
-        best_start = (ej0, ec0, ng0_0, scale0)
+        best_start = (ej0, ec0, ng0_0, scale0, baseline0)
         for ec_try in ec_grid:
             for ratio in ratio_grid:
                 ej_try = ec_try * ratio
                 if not (e_j_bounds_hz[0] <= ej_try <= e_j_bounds_hz[1]):
                     continue
-                f = cost(ej_try, ec_try, ng0_0, scale0)
+                f = cost(ej_try, ec_try, ng0_0, scale0, baseline0)
                 if f < best_fval:
                     best_fval = f
-                    best_start = (ej_try, ec_try, ng0_0, scale0)
+                    best_start = (ej_try, ec_try, ng0_0,
+                                  scale0, baseline0)
         m.values['e_j_hz'] = float(np.clip(best_start[0], *e_j_bounds_hz))
         m.values['e_c_hz'] = float(np.clip(best_start[1], *e_c_bounds_hz))
         m.values['n_g0'] = ng0_0
         if fit_scale:
             m.values['scale'] = scale0
+        if fit_baseline:
+            m.values['baseline'] = baseline0
 
         # MIGRAD + HESSE refinement.
         m.migrad()
@@ -1342,27 +1409,283 @@ class QPD:
         e_c = float(m.values['e_c_hz'])
         n_g0 = float(m.values['n_g0'])
         scale = float(m.values['scale'])
+        baseline = float(m.values['baseline'])
 
-        cq_fit = model_eval(e_j, e_c, n_g0, scale)
+        cq_fit = model_eval(e_j, e_c, n_g0, scale, baseline)
+
+        sig_ej = float(m.errors['e_j_hz'])
+        sig_ec = float(m.errors['e_c_hz'])
+
+        # Propagate the (E_J, E_C) HESSE covariance to E_J/E_C:
+        # σ_r² = (σ_J/E_C)² + (E_J σ_C / E_C²)² − 2 (E_J/E_C³) cov_JC.
+        try:
+            cov_jc = float(m.covariance['e_j_hz', 'e_c_hz'])
+        except Exception:
+            cov_jc = 0.0
+        ratio_var = ((sig_ej / e_c) ** 2
+                     + (e_j * sig_ec / e_c ** 2) ** 2
+                     - 2.0 * (e_j / e_c ** 3) * cov_jc)
+        sig_ratio = float(np.sqrt(max(ratio_var, 0.0)))
 
         errs = {
-            'e_j_hz': float(m.errors['e_j_hz']),
-            'e_c_hz': float(m.errors['e_c_hz']),
+            'e_j_hz': sig_ej,
+            'e_c_hz': sig_ec,
             'n_g0': float(m.errors['n_g0']) if fit_offset else 0.0,
             'scale': float(m.errors['scale']) if fit_scale else 0.0,
+            'baseline': (float(m.errors['baseline'])
+                         if fit_baseline else 0.0),
+            'ej_ec_ratio': sig_ratio,
         }
 
-        return {
+        result = {
             'e_j_hz': e_j,
             'e_c_hz': e_c,
             'n_g0': n_g0,
             'scale': scale,
+            'baseline': baseline,
             'ej_ec_ratio': e_j / e_c,
             'errors': errs,
             'cq_fit': cq_fit,
             'residuals': cq_measured - cq_fit,
             'fval': float(m.fval),
             'minuit': m,
+        }
+
+        if profile_ratio:
+            result['ratio_profile'] = self.profile_ratio_likelihood(
+                offset_charges, cq_measured, result,
+                n_ratio=profile_n_ratio,
+                span_factor=profile_span_factor,
+                parity=parity,
+                charge_cutoff=min(charge_cutoff, 10),
+                cq_sigma=cq_sigma,
+                progress=profile_progress,
+            )
+
+        return result
+
+    def profile_ratio_likelihood(self, offset_charges, cq_measured,
+                                 fit_result, ratio_grid=None,
+                                 n_ratio=25, span_factor=2.0,
+                                 parity='odd', charge_cutoff=18,
+                                 cq_sigma=None, print_level=0,
+                                 progress=False):
+        """
+        Profile-likelihood scan for the E_J/E_C ratio.
+
+        At each fixed ratio r in `ratio_grid`, refit
+        (E_C, n_g0, scale, baseline) with E_J = r·E_C constrained,
+        and record the minimized chi². The 1σ / 2σ / 3σ confidence
+        intervals for r are the ranges where Δχ² ≤ 1, 4, 9 relative
+        to the global minimum (Wilks' theorem, 1 parameter of
+        interest).
+
+        Whether `n_g0`, `scale`, `baseline` are floated or held fixed
+        follows the original fit: a parameter whose HESSE error in
+        `fit_result['errors']` is nonzero is treated as free and
+        re-minimized; otherwise it is held at `fit_result[name]`.
+
+        Parameters
+        ----------
+        offset_charges, cq_measured : array_like
+            Same n_g grid and C_Q values that were passed to
+            `fit_quantum_capacitance`.
+        fit_result : dict
+            Output of `fit_quantum_capacitance`. Used for the central
+            ratio, the held-fixed parameter values, and to decide
+            which nuisance parameters to float.
+        ratio_grid : array_like, optional
+            Explicit grid of E_J/E_C values to scan. If None, a
+            log-spaced grid of `n_ratio` points spanning
+            [r_fit / span_factor, r_fit · span_factor] is used.
+        n_ratio : int, optional
+            Grid size when `ratio_grid` is None. Default 25.
+        span_factor : float, optional
+            Half-width of the default grid in log units. Default 2
+            (i.e. a factor of 2 each side).
+        parity, charge_cutoff, cq_sigma, print_level
+            As in `fit_quantum_capacitance`.
+        progress : bool, optional
+            If True, display a tqdm progress bar over the ratio grid.
+            Requires the `tqdm` package (only imported when used).
+            Default False.
+
+        Returns
+        -------
+        profile : dict
+            Keys:
+            'ratio_grid'   — scanned ratios (sorted ascending),
+            'chi2'         — chi² at each ratio,
+            'chi2_min'     — global minimum of the scan,
+            'delta_chi2'   — chi2 − chi2_min,
+            'e_c_hz'       — best-fit E_C at each ratio,
+            'n_g0', 'scale', 'baseline' — best-fit nuisance values
+                              at each ratio (held fixed if not floated),
+            'ratio_best'   — argmin of the scan,
+            'sigma_levels' — dict mapping '1sigma'/'2sigma'/'3sigma'
+                              to (low, high) interval tuples; bounds
+                              that fall outside the grid are reported
+                              as None on that side.
+
+        Notes
+        -----
+        This is the "gold-standard" 1D confidence interval for the
+        ratio. In the deep-transmon limit the chi² valley is shallow
+        along the ratio direction, so the profile-likelihood
+        intervals are typically several to tens of times wider than
+        the HESSE error reported by `fit_quantum_capacitance`. That
+        gap is itself a diagnostic that the data has entered the
+        degenerate regime.
+        """
+        from iminuit import Minuit
+
+        offset_charges = np.asarray(offset_charges, dtype=float)
+        cq_measured = np.asarray(cq_measured, dtype=float)
+
+        if parity not in ('odd', 'even'):
+            raise ValueError(f"Invalid parity: {parity!r}")
+
+        if cq_sigma is None:
+            sigma_val = max(np.std(cq_measured) * 1e-2,
+                            np.max(np.abs(cq_measured)) * 1e-3)
+            sigma = np.full_like(cq_measured, sigma_val)
+        else:
+            sigma = np.broadcast_to(np.asarray(cq_sigma, dtype=float),
+                                    cq_measured.shape).copy()
+
+        errs = fit_result.get('errors', {}) or {}
+        free_ng0 = errs.get('n_g0', 0.0) > 0
+        free_scale = errs.get('scale', 0.0) > 0
+        free_baseline = errs.get('baseline', 0.0) > 0
+
+        e_c_fit = float(fit_result['e_c_hz'])
+        ng0_fit = float(fit_result['n_g0'])
+        scale_fit = float(fit_result['scale'])
+        baseline_fit = float(fit_result.get('baseline', 0.0))
+        r_fit = float(fit_result['ej_ec_ratio'])
+
+        if ratio_grid is None:
+            ratio_grid = np.geomspace(r_fit / span_factor,
+                                      r_fit * span_factor, n_ratio)
+        ratio_grid = np.sort(np.asarray(ratio_grid, dtype=float))
+
+        def _intrinsic_cq(ng_grid, e_j_hz, e_c_hz):
+            tmp = QPD.__new__(QPD)
+            tmp.e_j_hz = e_j_hz
+            tmp.e_c_hz = e_c_hz
+            tmp.e_j_ev = e_j_hz * QPD.PLANCK_EV_S
+            tmp.e_c_ev = e_c_hz * QPD.PLANCK_EV_S
+            tmp.delta_l_ev = 0.0
+            tmp.delta_r_ev = 0.0
+            cq_e, cq_o = QPD.compute_quantum_capacitance(
+                tmp, ng_grid, c_g_f=None, charge_cutoff=charge_cutoff,
+            )
+            return cq_o if parity == 'odd' else cq_e
+
+        chi2_arr = np.empty(ratio_grid.size)
+        ec_arr = np.empty(ratio_grid.size)
+        ng0_arr = np.empty(ratio_grid.size)
+        scale_arr = np.empty(ratio_grid.size)
+        baseline_arr = np.empty(ratio_grid.size)
+
+        def _make_cost(r_fixed):
+            def cost(e_c_hz, n_g0, scale, baseline):
+                f = _intrinsic_cq(offset_charges - n_g0,
+                                  r_fixed * e_c_hz, e_c_hz)
+                resid = (scale * f + baseline - cq_measured) / sigma
+                return float(np.sum(resid * resid))
+            return cost
+
+        if progress:
+            from tqdm.auto import tqdm
+            iterator = tqdm(enumerate(ratio_grid),
+                            total=len(ratio_grid),
+                            desc='profile_ratio_likelihood')
+        else:
+            iterator = enumerate(ratio_grid)
+
+        for i, r in iterator:
+            cost = _make_cost(float(r))
+
+            m = Minuit(cost, e_c_hz=e_c_fit, n_g0=ng0_fit,
+                       scale=scale_fit, baseline=baseline_fit)
+            m.errordef = Minuit.LEAST_SQUARES
+            m.print_level = print_level
+            m.errors['e_c_hz'] = max(abs(e_c_fit) * 0.05, 1e6)
+            m.errors['n_g0'] = 0.01
+            m.errors['scale'] = max(abs(scale_fit) * 0.1, 1e-3)
+            m.errors['baseline'] = max(np.std(cq_measured) * 1e-2, 1e-9)
+            m.limits['e_c_hz'] = (1e7, 1e11)
+            m.limits['n_g0'] = (-0.5, 0.5)
+            m.fixed['n_g0'] = not free_ng0
+            m.fixed['scale'] = not free_scale
+            m.fixed['baseline'] = not free_baseline
+            m.migrad()
+            chi2_arr[i] = float(m.fval)
+            ec_arr[i] = float(m.values['e_c_hz'])
+            ng0_arr[i] = float(m.values['n_g0'])
+            scale_arr[i] = float(m.values['scale'])
+            baseline_arr[i] = float(m.values['baseline'])
+
+        chi2_min = float(chi2_arr.min())
+        delta = chi2_arr - chi2_min
+        i_best = int(np.argmin(chi2_arr))
+        r_best = float(ratio_grid[i_best])
+
+        # Interpolate Δχ² crossings on each side of the minimum.
+        def _interval(level):
+            below = delta <= level
+            if below[0] and below[-1] and below.all():
+                return (float(ratio_grid[0]), float(ratio_grid[-1]))
+            # Walk outward from the minimum.
+            # Left edge.
+            lo = None
+            for k in range(i_best, 0, -1):
+                if delta[k - 1] > level and delta[k] <= level:
+                    # Linear interp in log(ratio) vs delta.
+                    x0, x1 = (np.log(ratio_grid[k - 1]),
+                              np.log(ratio_grid[k]))
+                    y0, y1 = delta[k - 1], delta[k]
+                    lo = float(np.exp(x0 + (level - y0) *
+                                      (x1 - x0) / (y1 - y0)))
+                    break
+            if lo is None and not below[0]:
+                lo = None  # cross is outside the grid on the left
+            elif lo is None and below[0]:
+                lo = float(ratio_grid[0])
+            # Right edge.
+            hi = None
+            for k in range(i_best, len(ratio_grid) - 1):
+                if delta[k] <= level and delta[k + 1] > level:
+                    x0, x1 = (np.log(ratio_grid[k]),
+                              np.log(ratio_grid[k + 1]))
+                    y0, y1 = delta[k], delta[k + 1]
+                    hi = float(np.exp(x0 + (level - y0) *
+                                      (x1 - x0) / (y1 - y0)))
+                    break
+            if hi is None and not below[-1]:
+                hi = None
+            elif hi is None and below[-1]:
+                hi = float(ratio_grid[-1])
+            return (lo, hi)
+
+        sigma_levels = {
+            '1sigma': _interval(1.0),
+            '2sigma': _interval(4.0),
+            '3sigma': _interval(9.0),
+        }
+
+        return {
+            'ratio_grid': ratio_grid,
+            'chi2': chi2_arr,
+            'chi2_min': chi2_min,
+            'delta_chi2': delta,
+            'e_c_hz': ec_arr,
+            'n_g0': ng0_arr,
+            'scale': scale_arr,
+            'baseline': baseline_arr,
+            'ratio_best': r_best,
+            'sigma_levels': sigma_levels,
         }
 
     def plot_quantum_capacitance(self, offset_charges=None, c_g_f=None,
@@ -1424,7 +1747,8 @@ class QPD:
         return fig, ax
 
     def plot_capacitance_fit(self, offset_charges, cq_measured,
-                             fit_result, units='Hz', figsize=(4, 4)):
+                             fit_result, units='Hz', figsize=(4, 4),
+                             use_profile=True):
         """
         Plot a measured C_Q trace with the best-fit overlay and residuals.
 
@@ -1439,9 +1763,19 @@ class QPD:
         units : str, optional
             Unit string used to label the y-axis of both panels. Default
             'Hz' (intrinsic curvature). Use e.g. 'F', 'fF', or 'aF' when
-            the input was in absolute capacitance units.
+            the input was in absolute capacitance units. When the fit
+            had `fit_scale=True` or `fit_baseline=True`, the y-axis is
+            silently relabeled 'arb. u.' regardless of this value,
+            since those modes concede that the absolute amplitude and
+            offset of cq_measured are not calibrated.
         figsize : tuple, optional
             Figure size, default (4, 4).
+        use_profile : bool, optional
+            If True (default) and `fit_result['ratio_profile']` is
+            present, display the E_J/E_C best fit and asymmetric 1σ
+            interval from the profile-likelihood scan. If False, or
+            if no profile is attached, fall back to the joint-fit
+            value with symmetric HESSE 1σ.
 
         Returns
         -------
@@ -1461,13 +1795,47 @@ class QPD:
                         markersize=3, color='black', label='measured')
             ax_top.plot(offset_charges, cq_fit, '-',
                         color='tab:red', linewidth=2, label='fit')
-            ax_top.set_ylabel(rf'$C_Q$ [{units}]')
-            title_parts = [
-                f"$E_J/E_C={fit_result['ej_ec_ratio']:.2f}$",
-                f"$E_J={fit_result['e_j_hz']/1e9:.3f}$ GHz",
-                f"$E_C={fit_result['e_c_hz']/1e9:.4f}$ GHz",
-                f"$n_{{g0}}={fit_result['n_g0']:+.3f}$",
-            ]
+            errs = fit_result.get('errors', {}) or {}
+            scale_was_free = errs.get('scale', 0.0) > 0
+            baseline_was_free = errs.get('baseline', 0.0) > 0
+            y_units = ('arb. u.' if (scale_was_free or baseline_was_free)
+                       else units)
+            ax_top.set_ylabel(rf'$C_Q$ [{y_units}]')
+            ratio_profile = (fit_result.get('ratio_profile')
+                             if use_profile else None)
+            title_parts = []
+            if scale_was_free:
+                # Scale free → individual (E_J, E_C) are degenerate
+                # with scale along the shallow valley; only the ratio
+                # is meaningful, so report ratio alone.
+                if ratio_profile is not None:
+                    r_best = float(ratio_profile['ratio_best'])
+                    lo, hi = ratio_profile['sigma_levels']['1sigma']
+                    plus = (hi - r_best) if hi is not None else 0.0
+                    minus = (r_best - lo) if lo is not None else 0.0
+                    title_parts.append(
+                        rf"$E_J/E_C={r_best:.2f}"
+                        rf"^{{+{plus:.2f}}}_{{-{minus:.2f}}}$"
+                    )
+                else:
+                    sig_ratio = errs.get('ej_ec_ratio', 0.0)
+                    title_parts.append(
+                        rf"$E_J/E_C={fit_result['ej_ec_ratio']:.2f}"
+                        rf"\pm{sig_ratio:.2f}$"
+                    )
+            else:
+                # Scale fixed → individual energies are identifiable;
+                # report them and skip the ratio.
+                sig_ej = errs.get('e_j_hz', 0.0)
+                sig_ec = errs.get('e_c_hz', 0.0)
+                title_parts.append(
+                    rf"$E_J=({fit_result['e_j_hz']/1e9:.3f}"
+                    rf"\pm{sig_ej/1e9:.3f})$ GHz"
+                )
+                title_parts.append(
+                    rf"$E_C=({fit_result['e_c_hz']/1e9:.4f}"
+                    rf"\pm{sig_ec/1e9:.4f})$ GHz"
+                )
             ax_top.set_title(', '.join(title_parts), fontsize=7)
             ax_top.legend(loc='best', fontsize=7)
             ax_top.minorticks_on()
@@ -1477,7 +1845,7 @@ class QPD:
                         markersize=3, color='tab:gray')
             ax_bot.axhline(0, color='black', linewidth=0.8, alpha=0.6)
             ax_bot.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
-            ax_bot.set_ylabel(f'residual [{units}]')
+            ax_bot.set_ylabel(f'residual [{y_units}]')
             ax_bot.minorticks_on()
             ax_bot.grid(alpha=0.3)
 
@@ -1549,6 +1917,7 @@ class QPD:
         ec_fit = float(fit_result['e_c_hz'])
         ng0_fit = float(fit_result['n_g0'])
         scale_fit = float(fit_result['scale'])
+        baseline_fit = float(fit_result.get('baseline', 0.0))
 
         ej_grid = np.geomspace(ej_fit / span_factor,
                                ej_fit * span_factor, n_grid)
@@ -1569,7 +1938,8 @@ class QPD:
                     tmp, offset_charges - ng0_fit, c_g_f=None,
                     charge_cutoff=charge_cutoff,
                 )
-                model = scale_fit * (cq_o if parity == 'odd' else cq_e)
+                model = (scale_fit * (cq_o if parity == 'odd' else cq_e)
+                         + baseline_fit)
                 resid = (model - cq_measured) / sigma
                 chi2[i, j] = float(np.sum(resid * resid))
 
