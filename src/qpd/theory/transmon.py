@@ -93,24 +93,50 @@ class QPD:
                 f"Available: {available}"
             )
         return db['materials'][material_name]['properties']
-    
-    def __init__(self, 
-                 e_j_hz, e_c_hz, temperature_k=0.02, r_n_ohm=27e3, 
+
+    @classmethod
+    def e_j_hz_from_r_n(cls, delta_hz, r_n_ohm):
+        """
+        Josephson energy from junction normal-state resistance via the
+        Ambegaokar-Baratoff relation in the symmetric T=0 limit:
+
+            E_J = h·Δ / (8·e²·R_n)
+
+        Parameters
+        ----------
+        delta_hz : float
+            Superconducting gap Δ expressed as a frequency [Hz]
+        r_n_ohm : float
+            Junction normal-state resistance R_n [Ω]
+
+        Returns
+        -------
+        float
+            Josephson energy E_J [Hz]
+        """
+        return h * delta_hz / (8 * e**2 * r_n_ohm)
+
+    def __init__(self,
+                 e_j_hz=None, e_c_hz=None, temperature_k=0.02, r_n_ohm=None,
                  delta_l_hz=None, delta_r_hz=None,
                  material='aluminum', **material_overrides):
         """
         Initialize QPD transmon simulator
-        
+
+        Specify either ``e_j_hz`` directly, or ``r_n_ohm`` to derive E_J
+        from the junction normal-state resistance via Ambegaokar-Baratoff
+        (uses ``delta_l_hz`` if provided, otherwise the material gap).
+
         Parameters
         ----------
-        e_j_hz : float
-            Josephson energy [Hz]
+        e_j_hz : float, optional
+            Josephson energy [Hz]. If omitted, derived from ``r_n_ohm``.
         e_c_hz : float
             Charging energy [Hz]
         temperature_k : float, optional
             Operating temperature [K], default 0.02 K
         r_n_ohm : float, optional
-            Normal state resistance [Ω], default 27 kΩ
+            Normal state resistance [Ω]. Required when ``e_j_hz`` is None.
         delta_l_hz : float, optional
             Left superconducting gap [Hz], defaults to material value
         delta_r_hz : float, optional
@@ -122,45 +148,53 @@ class QPD:
             Override material properties (dos, fermi_level, tc, delta)
             Values should be in SI/eV units as specified in YAML
         """
+        if e_c_hz is None:
+            raise ValueError("e_c_hz is required")
+
+        # Load material properties first so Δ is available for A-B if needed
+        self.material_name = material
+        mat_props = self.get_material_properties(material).copy()
+        mat_props.update(material_overrides)
+        self.dos = float(mat_props['dos'])  # [1/(μm³·eV)]
+        self.fermi_level = float(mat_props['fermi_level'])  # [eV]
+        self.tc = float(mat_props['tc'])  # [K]
+        self.delta_material = float(mat_props['delta'])  # [eV]
+
+        # Resolve gap energies (eV); convert from Hz if provided
+        if delta_l_hz is not None:
+            self.delta_l_ev = delta_l_hz * self.PLANCK_EV_S
+        else:
+            self.delta_l_ev = self.delta_material
+
+        if delta_r_hz is not None:
+            self.delta_r_ev = delta_r_hz * self.PLANCK_EV_S
+        else:
+            self.delta_r_ev = self.delta_material
+
+        # Derive E_J from R_n if not given directly
+        if e_j_hz is None:
+            if r_n_ohm is None:
+                raise ValueError(
+                    "Must specify either e_j_hz or r_n_ohm "
+                    "(E_J is derived from R_n via Ambegaokar-Baratoff)."
+                )
+            delta_hz = self.delta_l_ev / self.PLANCK_EV_S
+            e_j_hz = self.e_j_hz_from_r_n(delta_hz, r_n_ohm)
+
         # Store input parameters in their native units
         self.e_j_hz = e_j_hz
         self.e_c_hz = e_c_hz
         self.temperature_k = temperature_k
         self.r_n_ohm = r_n_ohm
-        
-        # Load material properties
-        self.material_name = material
-        mat_props = self.get_material_properties(material).copy()
-        
-        # Apply any manual overrides
-        mat_props.update(material_overrides)
-        
-        # Store material properties as instance variables
-        # Convert to float in case YAML parsed as string
-        self.dos = float(mat_props['dos'])  # [1/(μm³·eV)]
-        self.fermi_level = float(mat_props['fermi_level'])  # [eV]
-        self.tc = float(mat_props['tc'])  # [K]
-        self.delta_material = float(mat_props['delta'])  # [eV]
-        
+
         # Convert to eV for internal calculations
         self.e_j_ev = e_j_hz * self.PLANCK_EV_S
         self.e_c_ev = e_c_hz * self.PLANCK_EV_S
-        
-        # Delta in eV (convert from Hz if provided, else use material)
-        if delta_l_hz is not None:
-            self.delta_l_ev = delta_l_hz * self.PLANCK_EV_S
-        else:
-            self.delta_l_ev = self.delta_material
-            
-        if delta_r_hz is not None:
-            self.delta_r_ev = delta_r_hz * self.PLANCK_EV_S
-        else:
-            self.delta_r_ev = self.delta_material
-        
+
         # Computed quantities
         self.ej_ec_ratio = self.e_j_hz / self.e_c_hz
-        self.curly_n = (self.dos * 
-                       np.sqrt(2 * np.pi * self.delta_l_ev * 
+        self.curly_n = (self.dos *
+                       np.sqrt(2 * np.pi * self.delta_l_ev *
                                self.KB_EV_K * self.temperature_k))
         
     @classmethod
@@ -184,16 +218,10 @@ class QPD:
         QPD
             Configured QPD instance
         """
-        # Compute energies in eV first
         e_c_ev = cls.ELECTRON_CHARGE / (2 * c_total_f)  # eV
-        delta_ev = delta_hz * cls.PLANCK_EV_S  # eV
-        e_j_ev = (cls.PLANCK_EV_S * delta_ev / 
-                 (8 * cls.ELECTRON_CHARGE * r_n_ohm))  # eV
-        
-        # Convert to Hz for the constructor
         e_c_hz = e_c_ev / cls.PLANCK_EV_S
-        e_j_hz = e_j_ev / cls.PLANCK_EV_S
-        
+        e_j_hz = cls.e_j_hz_from_r_n(delta_hz, r_n_ohm)
+
         return cls(e_j_hz, e_c_hz, r_n_ohm=r_n_ohm, **kwargs)
     
     def build_hamiltonian(self, offset_charge, charge_cutoff=18):
@@ -2180,7 +2208,8 @@ class QPD:
         print(f"Eᴄ = {self.e_c_ev / self.KB_EV_K:.4f} K·kᴮ = "
               f"{self.e_c_hz / 1e9:.4f} GHz")
         print(f"Eⱼ/Eᴄ = {self.ej_ec_ratio:.2f}")
-        print(f"Rₙ = {self.r_n_ohm / 1e3:.1f} kΩ")
+        if self.r_n_ohm is not None:
+            print(f"Rₙ = {self.r_n_ohm / 1e3:.1f} kΩ")
         print(f"Δ = {self.delta_material / self.KB_EV_K * 1e3:.3f} mK·kᴮ")
         print(f"Resonator frequency = {readout_freq_hz / 1e9:.2f} GHz")
         print(f"Coupling g = {coupling_g_hz / 1e6:.1f} MHz")
