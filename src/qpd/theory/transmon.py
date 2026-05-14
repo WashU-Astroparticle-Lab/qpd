@@ -119,6 +119,7 @@ class QPD:
     def __init__(self,
                  e_j_hz=None, e_c_hz=None, temperature_k=0.02, r_n_ohm=None,
                  delta_l_hz=None, delta_r_hz=None,
+                 coupling_g_hz=150e6,
                  material='aluminum', **material_overrides):
         """
         Initialize QPD transmon simulator
@@ -141,6 +142,10 @@ class QPD:
             Left superconducting gap [Hz], defaults to material value
         delta_r_hz : float, optional
             Right superconducting gap [Hz], defaults to material value
+        coupling_g_hz : float, optional
+            Transmon-resonator coupling strength [Hz], default 150 MHz.
+            Used as the default ``coupling_g_hz`` in plotting methods
+            when none is passed explicitly.
         material : str, optional
             Material name from database, default 'aluminum'
             Options: 'aluminum', 'hafnium', 'niobium', etc.
@@ -186,6 +191,7 @@ class QPD:
         self.e_c_hz = e_c_hz
         self.temperature_k = temperature_k
         self.r_n_ohm = r_n_ohm
+        self.coupling_g_hz = coupling_g_hz
 
         # Convert to eV for internal calculations
         self.e_j_ev = e_j_hz * self.PLANCK_EV_S
@@ -511,20 +517,23 @@ class QPD:
                           figsize=(4, 3), ylim=None):
         """
         Plot energy level diagram vs offset charge
-        
+
         Shows both even parity (solid) and odd parity (dashed) levels.
-        
+
         Parameters
         ----------
         offset_charges : array_like, optional
             Offset charge values, default linspace(0, 1, 500)
         num_levels : int, optional
             Number of levels to plot, default 4
+        coupling_g_hz : float, optional
+            Transmon-resonator coupling strength [Hz]. If None (default),
+            uses ``self.coupling_g_hz``. Pass a value to override.
         figsize : tuple, optional
             Figure size (width, height), default (4, 3)
         ylim : tuple, optional
             Y-axis limits, default None
-            
+
         Returns
         -------
         fig : matplotlib.figure.Figure
@@ -534,6 +543,8 @@ class QPD:
         """
         if offset_charges is None:
             offset_charges = np.linspace(0, 1, 500)
+        if coupling_g_hz is None:
+            coupling_g_hz = self.coupling_g_hz
         
         energies_even, energies_odd, energy_diff = (
             self.solve_system(offset_charges, num_levels)
@@ -588,8 +599,7 @@ class QPD:
                 f'$E_J={self.e_j_hz/1e9:.2f}$ GHz',
                 f'$E_C={self.e_c_hz/1e9:.3f}$ GHz'
             ]
-            if coupling_g_hz is not None:
-                title_parts.append(f'$g={coupling_g_hz/1e6:.0f}$ MHz')
+            title_parts.append(f'$g={coupling_g_hz/1e6:.0f}$ MHz')
             #title_parts.append(f'$T={self.temperature_k*1e3:.0f}$ mK')
             ax.set_title(', '.join(title_parts), fontsize=7)
             
@@ -602,22 +612,23 @@ class QPD:
         
         return fig, ax
     
-    def plot_matrix_elements(self, offset_charges=None, 
-                            coupling_g_hz=150e6, 
+    def plot_matrix_elements(self, offset_charges=None,
+                            coupling_g_hz=None,
                             readout_freq_hz=7.0e9, num_levels=6, parity='odd',
                             energy_level=0,
                             figsize=(4, 3)):
         """
         Plot charge matrix elements vs offset charge
-        
+
         Shows |⟨j,o|n̂|0,o⟩| for transitions from ground state.
-        
+
         Parameters
         ----------
         offset_charges : array_like, optional
             Offset charge values, default linspace(0, 1, 500)
         coupling_g_hz : float, optional
-            Coupling strength [Hz], default 150 MHz
+            Coupling strength [Hz]. If None (default), uses
+            ``self.coupling_g_hz``. Pass a value to override.
         readout_freq_hz : float, optional
             Resonator frequency [Hz], default 7 GHz
         num_levels : int, optional
@@ -628,13 +639,15 @@ class QPD:
             Energy level to plot, default 0
         figsize : tuple, optional
             Figure size, default (4, 3)
-            
+
         Returns
         -------
         fig, ax : matplotlib figure and axes
         """
         if offset_charges is None:
             offset_charges = np.linspace(0, 1, 500)
+        if coupling_g_hz is None:
+            coupling_g_hz = self.coupling_g_hz
         
         num_points = len(offset_charges)
         matrix_elems = np.zeros((num_points, num_levels))
@@ -683,23 +696,24 @@ class QPD:
         
         return fig, ax
     
-    def plot_dispersive_shift(self, offset_charges=None, 
-                             coupling_g_hz=150e6, 
+    def plot_dispersive_shift(self, offset_charges=None,
+                             coupling_g_hz=None,
                              readout_freq_hz=7.0e9,
                              num_levels=6, figsize=(4, 3),
                              ylim=[-10, 10]):
         """
         Plot dispersive shift χ vs offset charge for both parities
-        
-        Shows charge-parity-dependent shift for ground and first 
+
+        Shows charge-parity-dependent shift for ground and first
         excited states for both odd (blue) and even (red) parities.
-        
+
         Parameters
         ----------
         offset_charges : array_like, optional
             Offset charge values, default linspace(0, 1, 500)
         coupling_g_hz : float, optional
-            Coupling strength [Hz], default 150 MHz
+            Coupling strength [Hz]. If None (default), uses
+            ``self.coupling_g_hz``. Pass a value to override.
         readout_freq_hz : float, optional
             Resonator frequency [Hz], default 7 GHz
         num_levels : int, optional
@@ -714,6 +728,8 @@ class QPD:
         """
         if offset_charges is None:
             offset_charges = np.linspace(0, 1, 500)
+        if coupling_g_hz is None:
+            coupling_g_hz = self.coupling_g_hz
         
         num_points = len(offset_charges)
         chi_vals_odd = np.zeros((num_points, num_levels))
@@ -792,24 +808,25 @@ class QPD:
         
         return fig, ax
     
-    def plot_parity_shift_vs_frequency(self, freq_range_hz=None, 
-                                      coupling_g_hz=150e6, 
+    def plot_parity_shift_vs_frequency(self, freq_range_hz=None,
+                                      coupling_g_hz=None,
                                       num_levels=6,
                                       freq_min_hz=1.0e9,
                                       offset_charges=[0.5],
                                       figsize=(4, 3)):
         """
         Plot parity-dependent dispersive shift vs resonator frequency
-        
+
         Plots the difference between odd and even parity chi values
         for multiple offset charges.
-        
+
         Parameters
         ----------
         freq_range_hz : array_like, optional
             Resonator frequencies [Hz], auto-computed if None
         coupling_g_hz : float, optional
-            Coupling strength [Hz], default 150 MHz
+            Coupling strength [Hz]. If None (default), uses
+            ``self.coupling_g_hz``. Pass a value to override.
         num_levels : int, optional
             Number of levels, default 6
         freq_min_hz : float, optional
@@ -818,7 +835,7 @@ class QPD:
             Offset charge values to plot, default [0.5]
         figsize : tuple, optional
             Figure size, default (4, 3)
-            
+
         Returns
         -------
         fig : matplotlib figure
@@ -826,6 +843,8 @@ class QPD:
             ax1: top subplot with parity shift
             ax2: bottom subplot with detuning ratio
         """
+        if coupling_g_hz is None:
+            coupling_g_hz = self.coupling_g_hz
         # Auto-determine frequency range if not provided
         if freq_range_hz is None:
             _, energies_odd, _ = self.solve_system([0.5], 4)
@@ -969,36 +988,39 @@ class QPD:
         
         return fig, (ax1, ax2)
     
-    def plot_parity_shift_vs_ng(self, offset_charges=None, 
-                                coupling_g_hz=150e6, 
+    def plot_parity_shift_vs_ng(self, offset_charges=None,
+                                coupling_g_hz=None,
                                 num_levels=6,
                                 readout_freqs=[7.0e9],
                                 figsize=(4, 3)):
         """
         Plot parity-dependent dispersive shift vs offset charge
-        
+
         Plots the difference between odd and even parity chi values
         as a function of offset charge for multiple resonator frequencies.
-        
+
         Parameters
         ----------
         offset_charges : array_like, optional
             Offset charge values from 0 to 1, default linspace(0, 1, 500)
         coupling_g_hz : float, optional
-            Coupling strength [Hz], default 150 MHz
+            Coupling strength [Hz]. If None (default), uses
+            ``self.coupling_g_hz``. Pass a value to override.
         num_levels : int, optional
             Number of levels, default 6
         readout_freqs : array_like, optional
             Resonator frequencies [Hz] to plot, default [7.0e9]
         figsize : tuple, optional
             Figure size, default (4, 3)
-            
+
         Returns
         -------
         fig, ax : matplotlib figure and axes
         """
         if offset_charges is None:
             offset_charges = np.linspace(0, 1, 500)
+        if coupling_g_hz is None:
+            coupling_g_hz = self.coupling_g_hz
         
         # Calculate f10 for reference
         _, energies, _ = self.solve_system([0], num_levels)
@@ -2171,33 +2193,36 @@ class QPD:
 
         return fig, ax
 
-    def plot_all(self, offset_charges=None, coupling_g_hz=150e6,
+    def plot_all(self, offset_charges=None, coupling_g_hz=None,
                 readout_freq_hz=7.0e9, num_levels=5):
         """
         Generate all standard plots for QPD transmon analysis
-        
+
         Creates four plots:
         1. Energy level diagram
         2. Matrix elements
         3. Dispersive shift vs offset charge
         4. Parity shift vs resonator frequency
-        
+
         Parameters
         ----------
         offset_charges : array_like, optional
             Offset charge values
         coupling_g_hz : float, optional
-            Coupling strength [Hz], default 150 MHz
+            Coupling strength [Hz]. If None (default), uses
+            ``self.coupling_g_hz``. Pass a value to override.
         readout_freq_hz : float, optional
             Resonator frequency [Hz], default 7 GHz
         num_levels : int, optional
             Number of levels, default 6
-            
+
         Returns
         -------
         figs : list
             List of figure handles
         """
+        if coupling_g_hz is None:
+            coupling_g_hz = self.coupling_g_hz
         self._readout_freq_hz = readout_freq_hz  # Store for later use
         
         print("=" * 60)
