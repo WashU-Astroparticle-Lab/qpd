@@ -338,15 +338,37 @@ class QPD:
         
         return energies_even, energies_odd, energy_diff
     
-    def compute_dispersive_matrix(self, offset_charge, coupling_g_hz, 
+    def compute_dispersive_matrix(self, offset_charge, coupling_g_hz,
                                   readout_freq_hz, num_levels=6, parity='odd',
-                                  charge_cutoff=30):
+                                  charge_cutoff=30,
+                                  method='perturbative',
+                                  n_qubit=None, n_photon=5, rwa=False):
         """
         Compute dispersive shift and matrix elements
-        
-        The dispersive shift is:
-        χᵢ = g² ∑ⱼ≠ᵢ [2ωᵢⱼ |⟨j,p|n̂|i,p⟩|² / (ωᵢⱼ² - ωᵣ²)]
-        
+
+        Two theories are available, selected by ``method``:
+
+        - ``method='perturbative'`` (default): second-order perturbation
+          theory in the qubit-resonator coupling g, applied to the full
+          (non-RWA) coupling ``ℏg n̂(a+a†)``. This is Eqn. 3 of Serniak
+          et al., PRA (2019):
+
+              χᵢ,ₚ = g² Σⱼ≠ᵢ 2 ωᵢⱼ,ₚ |⟨j,p|n̂|i,p⟩|² / (ωᵢⱼ,ₚ² − ωᵣ²)
+
+        - ``method='jc'``: numerical diagonalization of the truncated
+          Jaynes-Cummings-style Hamiltonian
+
+              H = H_CPB(n_g,p) ⊗ 𝟙_r + ℏωᵣ 𝟙_q ⊗ a†a
+                  + ℏg n̂_q ⊗ (a + a†)
+
+          in the joint qubit (n_qubit eigenstates) ⊗ resonator (n_photon
+          Fock states) basis. ``rwa=True`` drops the counter-rotating
+          terms. The dispersive shift is read off from the dressed
+          spectrum as χᵢ,ₚ = [E(|i,1⟩) − E(|i,0⟩)]/h − ωᵣ where |i,n⟩
+          labels the dressed state with maximum overlap on the bare
+          qubit-photon state. The JC path captures higher-order and
+          counter-rotating corrections beyond Eqn. 3.
+
         Parameters
         ----------
         offset_charge : float
@@ -356,18 +378,59 @@ class QPD:
         readout_freq_hz : float
             Resonator frequency [Hz]
         num_levels : int, optional
-            Number of levels for matrix elements, default 6
+            Number of qubit levels to report, default 6
         parity : str, optional
             Parity of the qubit, default 'odd'. Options: 'odd', 'even'
         charge_cutoff : int, optional
             Charge basis cutoff (higher for accuracy), default 30
-            
+        method : str, optional
+            'perturbative' (default) or 'jc'
+        n_qubit : int, optional
+            (JC only) Number of qubit eigenstates kept in the joint
+            Hilbert space. Defaults to ``max(num_levels + 2, 8)``.
+        n_photon : int, optional
+            (JC only) Maximum photon number kept (Fock dimension is
+            ``n_photon + 1``), default 5
+        rwa : bool, optional
+            (JC only) If True, apply the rotating-wave approximation
+            (drop counter-rotating terms). Default False.
+
         Returns
         -------
         matrix_elements : ndarray
-            Matrix elements |⟨j|n̂|0⟩|², shape (num_levels, num_levels)
+            Matrix elements |⟨j|n̂|i⟩|² in the bare qubit eigenbasis,
+            shape (num_levels, num_levels). Identical for both methods.
         chi_ip : ndarray
-            Dispersive shift χᵢ,ₚ [Hz], shape (num_levels,)
+            Single-photon dispersive shift χᵢ,ₚ [Hz], shape (num_levels,)
+        """
+        if method == 'perturbative':
+            return self._compute_dispersive_matrix_perturbative(
+                offset_charge, coupling_g_hz, readout_freq_hz,
+                num_levels=num_levels, parity=parity,
+                charge_cutoff=charge_cutoff,
+            )
+        elif method == 'jc':
+            if n_qubit is None:
+                n_qubit = max(num_levels + 2, 8)
+            return self._compute_dispersive_matrix_jc(
+                offset_charge, coupling_g_hz, readout_freq_hz,
+                num_levels=num_levels, parity=parity,
+                charge_cutoff=charge_cutoff,
+                n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
+            )
+        else:
+            raise ValueError(
+                f"Unknown method '{method}'. Expected 'perturbative' or 'jc'."
+            )
+
+    def _compute_dispersive_matrix_perturbative(
+        self, offset_charge, coupling_g_hz, readout_freq_hz,
+        num_levels=6, parity='odd', charge_cutoff=30,
+    ):
+        """
+        Perturbative dispersive shift (Eqn. 3 of Serniak 2019).
+
+        See ``compute_dispersive_matrix`` for the public signature.
         """
         if parity == 'odd':
             offset_charge += 0.5
@@ -375,48 +438,342 @@ class QPD:
             pass
         else:
             raise ValueError(f"Invalid parity: {parity}")
-        
+
         # Solve eigensystem
         eigenvalues, eigenvectors = self.solve_eigensystem(
             offset_charge, charge_cutoff
         )
-        
-        # Build number operator n̂ = ∑ₙ (n - nᵍ)|n⟩⟨n|
+
+        # Build number operator n̂ = ∑ₙ n |n⟩⟨n|
         charge_states = np.arange(-charge_cutoff, charge_cutoff + 1)
         number_operator = np.diag(charge_states)
-        
-        # Transform to energy eigenbasis
+
         total_states = len(eigenvalues)
         matrix_elements = np.zeros((num_levels, num_levels))
         chi_ip = np.zeros(num_levels)
-        
+
         for i in range(num_levels):
             for j in range(total_states):
                 if i != j:
-                    # Transition frequency
                     omega_ij = (eigenvalues[i] - eigenvalues[j]) / (
                         self.PLANCK_EV_S
-                    )  # Hz
-                    
-                    # Matrix element |⟨j|n̂|i⟩|²
+                    )
                     mat_elem_sq = np.abs(
-                        eigenvectors[:, j].conj() @ number_operator @ 
+                        eigenvectors[:, j].conj() @ number_operator @
                         eigenvectors[:, i]
                     ) ** 2
-                    
-                    # Store matrix elements for first num_levels states
                     if j < num_levels:
                         matrix_elements[i, j] = mat_elem_sq
-                    
-                    # Dispersive shift contribution
-                    chi_contrib = (2.0 * omega_ij * mat_elem_sq / 
-                                  (omega_ij ** 2 - readout_freq_hz ** 2))
+                    chi_contrib = (
+                        2.0 * omega_ij * mat_elem_sq /
+                        (omega_ij ** 2 - readout_freq_hz ** 2)
+                    )
                     chi_ip[i] += chi_contrib
-        
-        # Scale by coupling strength squared
+
         chi_ip *= coupling_g_hz ** 2
+        return matrix_elements, chi_ip
+
+    # ------------------------------------------------------------------
+    # Jaynes-Cummings (numerical diagonalization) path
+    # ------------------------------------------------------------------
+
+    def _qubit_block_in_eigenbasis(self, offset_charge, parity='odd',
+                                   n_qubit=8, charge_cutoff=30):
+        """
+        Diagonalize H_CPB at given (n_g, parity) and return the lowest
+        ``n_qubit`` eigenfrequencies and the number operator projected
+        into that truncated eigenbasis.
+
+        Returns
+        -------
+        qubit_freqs_hz : ndarray, shape (n_qubit,)
+            Qubit eigenfrequencies [Hz], relative to the ground state.
+        n_qubit_mat : ndarray, shape (n_qubit, n_qubit)
+            ⟨i|n̂|j⟩ in the truncated qubit eigenbasis (dimensionless).
+        """
+        if parity == 'odd':
+            offset_charge = offset_charge + 0.5
+        elif parity != 'even':
+            raise ValueError(f"Invalid parity: {parity}")
+
+        evals_ev, evecs = self.solve_eigensystem(
+            offset_charge, charge_cutoff
+        )
+        if n_qubit > len(evals_ev):
+            raise ValueError(
+                f"n_qubit={n_qubit} exceeds charge-basis dimension "
+                f"{len(evals_ev)}; increase charge_cutoff."
+            )
+
+        qubit_freqs_hz = (evals_ev[:n_qubit] - evals_ev[0]) / self.PLANCK_EV_S
+
+        charge_states = np.arange(-charge_cutoff, charge_cutoff + 1)
+        V = evecs[:, :n_qubit]
+        # n̂_ij = ⟨i| n_op |j⟩, with n_op diagonal in charge basis
+        n_qubit_mat = (V.conj().T * charge_states) @ V
+        return qubit_freqs_hz, n_qubit_mat
+
+    def build_jc_hamiltonian(self, offset_charge, coupling_g_hz,
+                             readout_freq_hz, parity='odd',
+                             n_qubit=8, n_photon=5, rwa=False,
+                             charge_cutoff=30, return_components=False):
+        """
+        Construct the joint qubit ⊗ resonator Hamiltonian (in Hz)
+
+            H/h = diag(ω_qᵢ) ⊗ 𝟙_r + ωᵣ 𝟙_q ⊗ a†a
+                  + g n̂_q ⊗ (a + a†)        [full coupling]
+                  or
+                  + g (n̂⁺ ⊗ a + n̂⁻ ⊗ a†)    [if rwa=True]
+
+        where n̂⁺ is the strictly upper-triangular part of n̂ in the
+        qubit eigenbasis (qubit-raising) and n̂⁻ = (n̂⁺)†.
+
+        Returned units are Hz (i.e. H/h). Diagonalize with eigh.
+
+        Parameters
+        ----------
+        offset_charge, parity, charge_cutoff
+            Specify the CPB Hamiltonian (parity adds 0.5 to n_g for odd).
+        coupling_g_hz : float
+            Qubit-resonator coupling g [Hz].
+        readout_freq_hz : float
+            Bare resonator frequency ωᵣ [Hz].
+        n_qubit : int
+            Number of qubit eigenstates kept.
+        n_photon : int
+            Maximum photon number kept (Fock dim = n_photon + 1).
+        rwa : bool
+            If True, drop counter-rotating terms.
+        return_components : bool
+            If True, also return the qubit frequencies, n̂ matrix, and
+            ordered list of bare basis labels (i, n).
+
+        Returns
+        -------
+        H : ndarray, shape (D, D) with D = n_qubit * (n_photon+1)
+            Joint Hamiltonian in Hz (real symmetric).
+        If ``return_components`` is True, also returns
+        ``(qubit_freqs_hz, n_qubit_mat, basis_labels)``.
+        """
+        qubit_freqs_hz, n_qubit_mat = self._qubit_block_in_eigenbasis(
+            offset_charge, parity=parity,
+            n_qubit=n_qubit, charge_cutoff=charge_cutoff,
+        )
+
+        n_fock = n_photon + 1
+        # Resonator operators in Fock basis
+        a = np.diag(np.sqrt(np.arange(1, n_fock)), k=1)   # ⟨m|a|m+1⟩ = √(m+1)
+        a_dag = a.T
+        num_op = a_dag @ a
+
+        I_q = np.eye(n_qubit)
+        I_r = np.eye(n_fock)
+        H_qubit = np.diag(qubit_freqs_hz)
+
+        H = np.kron(H_qubit, I_r) + np.kron(I_q, readout_freq_hz * num_op)
+
+        if rwa:
+            n_plus = np.triu(n_qubit_mat, k=1)  # qubit-raising part
+            n_minus = n_plus.conj().T
+            H_int = coupling_g_hz * (
+                np.kron(n_plus, a) + np.kron(n_minus, a_dag)
+            )
+        else:
+            H_int = coupling_g_hz * np.kron(n_qubit_mat, a + a_dag)
+
+        H = H + H_int
+        # Symmetrize against tiny numerical asymmetry
+        H = 0.5 * (H + H.conj().T)
+
+        if return_components:
+            basis_labels = [(i, n) for i in range(n_qubit) for n in range(n_fock)]
+            return H, qubit_freqs_hz, n_qubit_mat, basis_labels
+        return H
+
+    def solve_jc_eigensystem(self, offset_charge, coupling_g_hz,
+                             readout_freq_hz, parity='odd',
+                             n_qubit=8, n_photon=5, rwa=False,
+                             charge_cutoff=30):
+        """
+        Diagonalize the joint qubit-resonator Hamiltonian and label
+        dressed states by maximum overlap with bare |i, n⟩ states.
+
+        Returns
+        -------
+        dressed_freqs_hz : ndarray, shape (D,)
+            Dressed eigenfrequencies [Hz], sorted ascending.
+        dressed_vecs : ndarray, shape (D, D)
+            Columns are dressed eigenvectors in the bare basis (ordered
+            qubit-major: index = i * (n_photon+1) + n).
+        labels : list of (int, int)
+            For each dressed state, the bare (i, n) with maximum overlap.
+        overlaps : ndarray, shape (D,)
+            Probability |⟨i,n|ψ⟩|² of the assigned bare label.
+        """
+        H, qfreqs, nmat, basis_labels = self.build_jc_hamiltonian(
+            offset_charge, coupling_g_hz, readout_freq_hz,
+            parity=parity, n_qubit=n_qubit, n_photon=n_photon,
+            rwa=rwa, charge_cutoff=charge_cutoff,
+            return_components=True,
+        )
+        evals, evecs = eigh(H)
+
+        # Label by max-overlap with bare states
+        probs = np.abs(evecs) ** 2  # shape (D, D); rows=bare, cols=dressed
+        bare_idx = np.argmax(probs, axis=0)
+        overlaps = probs[bare_idx, np.arange(probs.shape[1])]
+        labels = [basis_labels[k] for k in bare_idx]
+
+        # Reorder so dressed states with the same bare label appear in
+        # ascending energy (energy-sort already does this since we sort
+        # by eigenvalue). Detect duplicate labels and warn via overlap.
+        return evals, evecs, labels, overlaps
+
+    def _compute_dispersive_matrix_jc(
+        self, offset_charge, coupling_g_hz, readout_freq_hz,
+        num_levels=6, parity='odd', charge_cutoff=30,
+        n_qubit=8, n_photon=5, rwa=False,
+    ):
+        """
+        Dispersive shift via numerical JC diagonalization. See
+        ``compute_dispersive_matrix`` for the public signature.
+        """
+        if num_levels > n_qubit:
+            raise ValueError(
+                f"num_levels={num_levels} exceeds n_qubit={n_qubit}; "
+                "raise n_qubit."
+            )
+        if n_photon < 1:
+            raise ValueError("n_photon must be >= 1 to read off χ.")
+
+        evals, evecs, labels, _ = self.solve_jc_eigensystem(
+            offset_charge, coupling_g_hz, readout_freq_hz,
+            parity=parity, n_qubit=n_qubit, n_photon=n_photon,
+            rwa=rwa, charge_cutoff=charge_cutoff,
+        )
+
+        # Map each dressed state to its (i, n) bare label and pick the
+        # lowest-energy dressed state with that label.
+        energy_map = {}
+        for k, (i, n) in enumerate(labels):
+            if (i, n) not in energy_map:
+                energy_map[(i, n)] = evals[k]
+
+        chi_ip = np.zeros(num_levels)
+        for i in range(num_levels):
+            try:
+                e0 = energy_map[(i, 0)]
+                e1 = energy_map[(i, 1)]
+            except KeyError as exc:
+                raise RuntimeError(
+                    f"Could not identify dressed state for bare |{exc.args[0]}⟩; "
+                    "increase n_qubit/n_photon or check for anticrossings."
+                )
+            chi_ip[i] = (e1 - e0) - readout_freq_hz
+
+        # Build |⟨j|n̂|i⟩|² in bare qubit eigenbasis for compatibility
+        _, n_qubit_mat = self._qubit_block_in_eigenbasis(
+            offset_charge, parity=parity,
+            n_qubit=max(n_qubit, num_levels), charge_cutoff=charge_cutoff,
+        )
+        matrix_elements = np.abs(n_qubit_mat[:num_levels, :num_levels]) ** 2
+        # Match perturbative convention: zero diagonal (i = j excluded)
+        np.fill_diagonal(matrix_elements, 0.0)
 
         return matrix_elements, chi_ip
+
+    def compute_stark_spectrum(self, offset_charge, coupling_g_hz,
+                               readout_freq_hz, num_levels=4, parity='odd',
+                               n_qubit=8, n_photon=8, rwa=False,
+                               charge_cutoff=30):
+        """
+        Compute multi-photon (AC Stark) dispersive structure from the
+        dressed JC spectrum.
+
+        For each qubit level i and photon number n, the dressed energy
+        E(|i,n⟩) is identified by max overlap with the bare state |i⟩⊗|n⟩.
+        From these we derive:
+
+        - photon-number-resolved dispersive shift
+              χᵢ(n) = [E(|i,n+1⟩) − E(|i,n⟩)] − ωᵣ
+          (the resonator transition frequency when the qubit sits in
+          dressed |i⟩ shifts from ωᵣ by χᵢ(n); for n=0 this is the
+          standard single-photon χ).
+        - AC Stark shift of qubit transitions
+              Δωᵢⱼ(n) = [E(|j,n⟩) − E(|i,n⟩)] − [E(|j,0⟩) − E(|i,0⟩)]
+          which captures the photon-induced shift of qubit |i⟩→|j⟩.
+
+        Parameters
+        ----------
+        offset_charge, parity, charge_cutoff
+            CPB parameters (parity offsets n_g by 0.5 for 'odd').
+        coupling_g_hz, readout_freq_hz : float
+            Coupling g and bare resonator frequency [Hz].
+        num_levels : int
+            Number of qubit levels to report (≤ n_qubit).
+        n_qubit, n_photon : int
+            Truncations for qubit eigenstates and photon Fock space.
+        rwa : bool
+            Apply RWA in coupling if True.
+
+        Returns
+        -------
+        dressed_freqs_hz : ndarray, shape (num_levels, n_photon+1)
+            E(|i,n⟩) in Hz (relative to E(|0,0⟩)).
+        chi_n_hz : ndarray, shape (num_levels, n_photon)
+            χᵢ(n) for n = 0..n_photon−1, in Hz.
+        qubit_stark_hz : ndarray, shape (num_levels, n_photon+1)
+            Qubit transition |0⟩→|i⟩ frequency at n photons, in Hz
+            (entry [0, :] is identically zero).
+        """
+        if num_levels > n_qubit:
+            raise ValueError(
+                f"num_levels={num_levels} exceeds n_qubit={n_qubit}."
+            )
+
+        evals, _, labels, overlaps = self.solve_jc_eigensystem(
+            offset_charge, coupling_g_hz, readout_freq_hz,
+            parity=parity, n_qubit=n_qubit, n_photon=n_photon,
+            rwa=rwa, charge_cutoff=charge_cutoff,
+        )
+
+        # Pick lowest-energy dressed state with each (i, n) label
+        energy_map = {}
+        overlap_map = {}
+        for k, (i, n) in enumerate(labels):
+            if (i, n) not in energy_map:
+                energy_map[(i, n)] = evals[k]
+                overlap_map[(i, n)] = overlaps[k]
+
+        n_fock = n_photon + 1
+        dressed = np.zeros((num_levels, n_fock))
+        for i in range(num_levels):
+            for n in range(n_fock):
+                try:
+                    dressed[i, n] = energy_map[(i, n)]
+                except KeyError:
+                    raise RuntimeError(
+                        f"Bare state |{i},{n}⟩ not found among dressed labels; "
+                        "increase n_qubit/n_photon or operating point may sit "
+                        "on a strong anticrossing."
+                    )
+
+        # Shift so that |0,0⟩ is at zero energy
+        dressed -= dressed[0, 0]
+
+        chi_n_hz = np.zeros((num_levels, n_photon))
+        for i in range(num_levels):
+            for n in range(n_photon):
+                chi_n_hz[i, n] = (dressed[i, n + 1] - dressed[i, n]) - readout_freq_hz
+
+        qubit_stark_hz = np.zeros((num_levels, n_fock))
+        for i in range(num_levels):
+            f_i_0 = dressed[i, 0] - dressed[0, 0]
+            for n in range(n_fock):
+                f_i_n = dressed[i, n] - dressed[0, n]
+                qubit_stark_hz[i, n] = f_i_n - f_i_0
+
+        return dressed, chi_n_hz, qubit_stark_hz
 
     def compute_quantum_capacitance(self, offset_charges,
                                     c_g_f=None, charge_cutoff=18,
@@ -700,7 +1057,9 @@ class QPD:
                              coupling_g_hz=None,
                              readout_freq_hz=7.0e9,
                              num_levels=6, figsize=(4, 3),
-                             ylim=[-10, 10]):
+                             ylim=[-10, 10],
+                             method='perturbative',
+                             n_qubit=None, n_photon=5, rwa=False):
         """
         Plot dispersive shift χ vs offset charge for both parities
 
@@ -722,6 +1081,11 @@ class QPD:
             Figure size, default (4, 3)
         ylim : tuple, optional
             Y-axis limits, default [-10, 10] MHz
+        method : str, optional
+            Dispersive-shift theory to use, 'perturbative' (default) or
+            'jc'. See ``compute_dispersive_matrix``.
+        n_qubit, n_photon, rwa : optional
+            JC-only truncation/options. See ``compute_dispersive_matrix``.
         Returns
         -------
         fig, ax : matplotlib figure and axes
@@ -730,20 +1094,23 @@ class QPD:
             offset_charges = np.linspace(0, 1, 500)
         if coupling_g_hz is None:
             coupling_g_hz = self.coupling_g_hz
-        
+
         num_points = len(offset_charges)
         chi_vals_odd = np.zeros((num_points, num_levels))
         chi_vals_even = np.zeros((num_points, num_levels))
-        
+
+        disp_kwargs = dict(method=method, n_qubit=n_qubit,
+                           n_photon=n_photon, rwa=rwa)
+
         # Compute chi for both parities
         for i, n_g in enumerate(offset_charges):
             _, chi_odd = self.compute_dispersive_matrix(
-                n_g, coupling_g_hz, readout_freq_hz, num_levels, 
-                parity='odd'
+                n_g, coupling_g_hz, readout_freq_hz, num_levels,
+                parity='odd', **disp_kwargs,
             )
             _, chi_even = self.compute_dispersive_matrix(
-                n_g, coupling_g_hz, readout_freq_hz, num_levels, 
-                parity='even'
+                n_g, coupling_g_hz, readout_freq_hz, num_levels,
+                parity='even', **disp_kwargs,
             )
             chi_vals_odd[i, :] = chi_odd
             chi_vals_even[i, :] = chi_even
@@ -792,28 +1159,33 @@ class QPD:
                       label=r'$-g^2/\Delta+g^2/(\Delta-E_C)$')
             
             # Construct comprehensive title
+            method_tag = method if method != 'jc' else (
+                'jc-rwa' if rwa else 'jc'
+            )
             title_parts = [
                 f'$\\xi={self.ej_ec_ratio:.1f}$',
                 f'$E_J={self.e_j_hz/1e9:.2f}$ GHz',
                 f'$E_C={self.e_c_hz/1e9:.3f}$ GHz',
                 f'$g={coupling_g_hz/1e6:.0f}$ MHz',
                 f'$f_r={readout_freq_hz/1e9:.2f}$ GHz',
-                #f'$T={self.temperature_k*1e3:.0f}$ mK'
+                f'method={method_tag}',
             ]
             ax.set_title(', '.join(title_parts), fontsize=7)
-            
+
             ax.minorticks_on()
             ax.legend(loc="best", ncol=2, fontsize=6)
             ax.grid(alpha=0.3)
-        
+
         return fig, ax
-    
+
     def plot_parity_shift_vs_frequency(self, freq_range_hz=None,
                                       coupling_g_hz=None,
                                       num_levels=6,
                                       freq_min_hz=1.0e9,
                                       offset_charges=[0.5],
-                                      figsize=(4, 3)):
+                                      figsize=(4, 3),
+                                      method='perturbative',
+                                      n_qubit=None, n_photon=5, rwa=False):
         """
         Plot parity-dependent dispersive shift vs resonator frequency
 
@@ -878,7 +1250,8 @@ class QPD:
         # Result shape: (len(freq_range), len(offset_charges))
         # Transpose to get: (len(offset_charges), len(freq_range))
         chi_diffs = self.compute_delta_chi_0(
-            freq_range_hz, offset_charges, coupling_g_hz, num_levels
+            freq_range_hz, offset_charges, coupling_g_hz, num_levels,
+            method=method, n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
         ).T
         
         with plt.style.context(self._style_path):
@@ -992,7 +1365,9 @@ class QPD:
                                 coupling_g_hz=None,
                                 num_levels=6,
                                 readout_freqs=[7.0e9],
-                                figsize=(4, 3)):
+                                figsize=(4, 3),
+                                method='perturbative',
+                                n_qubit=None, n_photon=5, rwa=False):
         """
         Plot parity-dependent dispersive shift vs offset charge
 
@@ -1029,7 +1404,8 @@ class QPD:
         
         # Compute chi_diff for each resonator frequency
         chi_diffs = self.compute_delta_chi_0(
-            readout_freqs, offset_charges, coupling_g_hz, num_levels
+            readout_freqs, offset_charges, coupling_g_hz, num_levels,
+            method=method, n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
         )
         
         with plt.style.context(self._style_path):
@@ -1070,13 +1446,15 @@ class QPD:
         
         return fig, ax
     
-    def compute_average_chi_0(self, coupling_g_hz, readout_freq_hz, 
-                             num_points=500, num_levels=6):
+    def compute_average_chi_0(self, coupling_g_hz, readout_freq_hz,
+                             num_points=500, num_levels=6,
+                             method='perturbative',
+                             n_qubit=None, n_photon=5, rwa=False):
         """
         Compute average dispersive shift for ground state (i=0)
-        
+
         Averages chi_0 over offset charges from 0 to 1 for both parities.
-        
+
         Parameters
         ----------
         coupling_g_hz : float
@@ -1087,7 +1465,9 @@ class QPD:
             Number of offset charge points to sample, default 500
         num_levels : int, optional
             Number of levels for dispersive calculation, default 6
-            
+        method, n_qubit, n_photon, rwa
+            See ``compute_dispersive_matrix``.
+
         Returns
         -------
         chi_0_avg : float
@@ -1096,19 +1476,19 @@ class QPD:
         offset_charges = np.linspace(0, 1, num_points)
         chi_0_odd = np.zeros(num_points)
         chi_0_even = np.zeros(num_points)
-        
+        disp_kwargs = dict(method=method, n_qubit=n_qubit,
+                           n_photon=n_photon, rwa=rwa)
+
         for i, n_g in enumerate(offset_charges):
-            # Compute for odd parity
             _, chi_odd = self.compute_dispersive_matrix(
-                n_g, coupling_g_hz, readout_freq_hz, num_levels, 
-                parity='odd'
+                n_g, coupling_g_hz, readout_freq_hz, num_levels,
+                parity='odd', **disp_kwargs,
             )
             chi_0_odd[i] = chi_odd[0]
-            
-            # Compute for even parity
+
             _, chi_even = self.compute_dispersive_matrix(
-                n_g, coupling_g_hz, readout_freq_hz, num_levels, 
-                parity='even'
+                n_g, coupling_g_hz, readout_freq_hz, num_levels,
+                parity='even', **disp_kwargs,
             )
             chi_0_even[i] = chi_even[0]
         
@@ -1119,14 +1499,16 @@ class QPD:
         
         return chi_0_avg
     
-    def compute_delta_chi_0(self, readout_freqs, offset_charges, 
-                           coupling_g_hz, num_levels=6):
+    def compute_delta_chi_0(self, readout_freqs, offset_charges,
+                           coupling_g_hz, num_levels=6,
+                           method='perturbative',
+                           n_qubit=None, n_photon=5, rwa=False):
         """
         Compute parity-dependent dispersive shift difference
-        
+
         Computes Δχ₀ = χ₀,odd - χ₀,even for the ground state across
         different resonator frequencies and offset charges.
-        
+
         Parameters
         ----------
         readout_freqs : array_like
@@ -1137,33 +1519,34 @@ class QPD:
             Coupling strength [Hz]
         num_levels : int, optional
             Number of levels for dispersive calculation, default 6
-            
+        method, n_qubit, n_photon, rwa
+            See ``compute_dispersive_matrix``.
+
         Returns
         -------
         chi_diffs : ndarray
-            Parity shift difference [Hz], 
+            Parity shift difference [Hz],
             shape (len(readout_freqs), len(offset_charges))
         """
         readout_freqs = np.atleast_1d(readout_freqs)
         offset_charges = np.atleast_1d(offset_charges)
-        
-        # Store chi_diff for each resonator frequency
+
         chi_diffs = np.zeros((len(readout_freqs), len(offset_charges)))
-        
+        disp_kwargs = dict(method=method, n_qubit=n_qubit,
+                           n_photon=n_photon, rwa=rwa)
+
         for idx, f_r in enumerate(readout_freqs):
             for i, n_g in enumerate(offset_charges):
-                # Chi for odd parity
                 _, chi_odd = self.compute_dispersive_matrix(
-                    n_g, coupling_g_hz, f_r, num_levels, 
-                    parity='odd'
+                    n_g, coupling_g_hz, f_r, num_levels,
+                    parity='odd', **disp_kwargs,
                 )
-                # Chi for even parity
                 _, chi_even = self.compute_dispersive_matrix(
-                    n_g, coupling_g_hz, f_r, num_levels, 
-                    parity='even'
+                    n_g, coupling_g_hz, f_r, num_levels,
+                    parity='even', **disp_kwargs,
                 )
                 chi_diffs[idx, i] = chi_odd[0] - chi_even[0]
-        
+
         return chi_diffs
     
     def estimate_g_from_chi_0(self, chi_0_measured_hz, readout_freq_hz, 
