@@ -541,20 +541,33 @@ class QPD:
         all eigenvalue differences (i.e. all χ's, all dressed transition
         frequencies, all dispersive shifts) **identical**.
 
-        Why we use the shifted form: in our truncated Fock space, the
-        unshifted convention has a diagonal of n̂ in the qubit eigenbasis
-        that grows with n_g (since ⟨i|n̂|i⟩ tracks the qubit's charge
-        expectation, which follows n_g). At n_g ≈ 1, the diagonal
-        coherent drive on the resonator has amplitude ~g·1 — and the
-        symmetry-restoring displacement ``D̂(g/ωᵣ)`` no longer closes on
-        the truncated Fock space. This breaks the exact n_g-periodicity
-        at the truncation edge, *asymmetrically* in n_g (the drive at
-        n_g = 0.93 is ~13× larger than at n_g = 0.07 for typical
-        parameters). The shifted form bounds the diagonal of
-        ``n̂ − n_g`` by the qubit's charge dispersion (≲0.1 for the low
-        levels in the QPD regime), so the residual displacement is the
-        same small value at all n_g, and numerical n_g-periodicity is
-        recovered at modest n_photon.
+        Why we use the shifted form: with the unshifted convention the
+        diagonal of n̂ in the qubit eigenbasis is large (~n_g; the qubit's
+        charge expectation tracks the offset). That puts a large
+        state-independent piece ``g·⟨i|n̂|i⟩·(a + a†)`` into the joint
+        Hamiltonian — effectively a coherent drive on the resonator with
+        the same amplitude in every qubit state. In the full Hilbert
+        space this is removable by a single resonator displacement and
+        is genuinely irrelevant; numerically it leaves a large
+        structural fingerprint in the joint matrix whose magnitude
+        differs by ~|1 − 2 n_g| between n_g and 1 − n_g. That mismatch
+        destabilizes the dressed-state ↔ bare-state labeling near
+        multi-photon anticrossings: the Hungarian assignment can swap
+        between two near-degenerate optima slightly differently on the
+        two sides, producing a spurious asymmetry in the extracted
+        χᵢ(n) at high n (empirically up to ~70 kHz at n=72 for the
+        WashU parameters). The asymmetry is *not* a Fock-edge leakage
+        effect — it is independent of n_photon (verified by sweeping
+        n_photon = 90 → 200 with no improvement).
+
+        The shifted form bounds the diagonal of ``n̂ − n_g`` by the
+        qubit's charge dispersion (~0.1, the *same* small value at
+        every n_g for low-lying QPD levels). The large state-independent
+        drive is gone, the joint matrix structure is the same at n_g and
+        1 − n_g up to the genuine charge-conjugation symmetry, and the
+        Hungarian labeling stabilizes. Periodicity is recovered to
+        machine precision (verified: |Δχ(0.07) − Δχ(0.93)| drops from
+        ~70 kHz to < 10⁻⁶ kHz at the same truncation).
 
         Returned units are Hz (i.e. H/h). Diagonalize with eigh.
 
