@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from scipy.constants import h, k, e, eV
 from scipy.linalg import eigh
+from scipy.optimize import linear_sum_assignment
 import yaml
 from pathlib import Path
 
@@ -521,12 +522,39 @@ class QPD:
         Construct the joint qubit ⊗ resonator Hamiltonian (in Hz)
 
             H/h = diag(ω_qᵢ) ⊗ 𝟙_r + ωᵣ 𝟙_q ⊗ a†a
-                  + g n̂_q ⊗ (a + a†)        [full coupling]
+                  + g (n̂ − n_g)_q ⊗ (a + a†)        [full coupling]
                   or
-                  + g (n̂⁺ ⊗ a + n̂⁻ ⊗ a†)    [if rwa=True]
+                  + g ((n̂ − n_g)⁺ ⊗ a + (n̂ − n_g)⁻ ⊗ a†)   [if rwa=True]
 
-        where n̂⁺ is the strictly upper-triangular part of n̂ in the
-        qubit eigenbasis (qubit-raising) and n̂⁻ = (n̂⁺)†.
+        where ``(n̂ − n_g)_q`` is the operator ``n̂ − n_g·𝟙`` projected
+        into the truncated qubit eigenbasis. The superscript ⁺ takes the
+        strictly upper-triangular (qubit-raising) part.
+
+        **Physical-equivalence note (the shift).** The "textbook" form of
+        the qubit-resonator coupling is ``g·n̂·(a + a†)``, with n̂ the
+        absolute Cooper-pair number. We use ``g·(n̂ − n_g)·(a + a†)``
+        here instead. The two are *exactly equivalent* in the full
+        Hilbert space: they differ by ``−g·n_g·(a + a†)``, a coherent
+        drive on the resonator that depends on no qubit operators. That
+        drive is removed by a resonator displacement
+        ``D̂(g·n_g/ωᵣ)`` — a unitary on the resonator alone — leaving
+        all eigenvalue differences (i.e. all χ's, all dressed transition
+        frequencies, all dispersive shifts) **identical**.
+
+        Why we use the shifted form: in our truncated Fock space, the
+        unshifted convention has a diagonal of n̂ in the qubit eigenbasis
+        that grows with n_g (since ⟨i|n̂|i⟩ tracks the qubit's charge
+        expectation, which follows n_g). At n_g ≈ 1, the diagonal
+        coherent drive on the resonator has amplitude ~g·1 — and the
+        symmetry-restoring displacement ``D̂(g/ωᵣ)`` no longer closes on
+        the truncated Fock space. This breaks the exact n_g-periodicity
+        at the truncation edge, *asymmetrically* in n_g (the drive at
+        n_g = 0.93 is ~13× larger than at n_g = 0.07 for typical
+        parameters). The shifted form bounds the diagonal of
+        ``n̂ − n_g`` by the qubit's charge dispersion (≲0.1 for the low
+        levels in the QPD regime), so the residual displacement is the
+        same small value at all n_g, and numerical n_g-periodicity is
+        recovered at modest n_photon.
 
         Returned units are Hz (i.e. H/h). Diagonalize with eigh.
 
@@ -545,20 +573,36 @@ class QPD:
         rwa : bool
             If True, drop counter-rotating terms.
         return_components : bool
-            If True, also return the qubit frequencies, n̂ matrix, and
-            ordered list of bare basis labels (i, n).
+            If True, also return the qubit frequencies, the *shifted*
+            n̂ matrix used in the coupling, and ordered list of bare
+            basis labels (i, n).
 
         Returns
         -------
         H : ndarray, shape (D, D) with D = n_qubit * (n_photon+1)
             Joint Hamiltonian in Hz (real symmetric).
         If ``return_components`` is True, also returns
-        ``(qubit_freqs_hz, n_qubit_mat, basis_labels)``.
+        ``(qubit_freqs_hz, n_shift_mat, basis_labels)`` where
+        ``n_shift_mat`` is the ``n̂ − n_g`` matrix in the truncated
+        qubit eigenbasis.
         """
         qubit_freqs_hz, n_qubit_mat = self._qubit_block_in_eigenbasis(
             offset_charge, parity=parity,
             n_qubit=n_qubit, charge_cutoff=charge_cutoff,
         )
+
+        # --- Convention shift: use (n̂ − n_g_eff) in the coupling. ---
+        # n_g_eff is the parity-adjusted offset that the CPB was actually
+        # diagonalized at: the helper already added 0.5 internally for
+        # parity='odd', so we reconstruct that here.
+        # Subtracting n_g_eff·I from n_qubit_mat is exactly the shift
+        # discussed in the docstring above. Off-diagonal matrix elements
+        # are unchanged (a scalar diagonal subtracts only on the
+        # diagonal in any orthonormal basis), so the qubit-changing
+        # coupling — the part that produces χ — is untouched. Only the
+        # state-independent coherent drive on the resonator is removed.
+        n_g_eff = offset_charge + (0.5 if parity == 'odd' else 0.0)
+        n_qubit_mat = n_qubit_mat - n_g_eff * np.eye(n_qubit)
 
         n_fock = n_photon + 1
         # Resonator operators in Fock basis
@@ -606,9 +650,18 @@ class QPD:
             Columns are dressed eigenvectors in the bare basis (ordered
             qubit-major: index = i * (n_photon+1) + n).
         labels : list of (int, int)
-            For each dressed state, the bare (i, n) with maximum overlap.
+            For each dressed state, the bare (i, n) assigned via Hungarian
+            (linear-sum) assignment — the unique bare↔dressed bijection
+            that maximizes total overlap. In the deep dispersive regime
+            this coincides with naive argmax labeling; near anticrossings
+            or at large photon number where two dressed states would
+            otherwise compete for the same bare label, Hungarian resolves
+            the assignment correctly.
         overlaps : ndarray, shape (D,)
-            Probability |⟨i,n|ψ⟩|² of the assigned bare label.
+            Probability |⟨i,n|ψ⟩|² of the assigned bare label. Values
+            close to 1 mean the label is physically meaningful; values
+            below ~0.5 mean the dressed state is a strong mixture and
+            the label is just the nearest bare basis vector.
         """
         H, qfreqs, nmat, basis_labels = self.build_jc_hamiltonian(
             offset_charge, coupling_g_hz, readout_freq_hz,
@@ -618,15 +671,20 @@ class QPD:
         )
         evals, evecs = eigh(H)
 
-        # Label by max-overlap with bare states
-        probs = np.abs(evecs) ** 2  # shape (D, D); rows=bare, cols=dressed
-        bare_idx = np.argmax(probs, axis=0)
+        # Hungarian assignment: find the bijection bare ↔ dressed that
+        # maximizes total overlap. Strictly better than greedy argmax,
+        # which can assign two dressed states to the same bare label and
+        # leave another bare label orphaned (RuntimeError downstream).
+        probs = np.abs(evecs) ** 2  # rows=bare, cols=dressed
+        # linear_sum_assignment minimizes — negate to maximize overlap.
+        row_ind, col_ind = linear_sum_assignment(-probs)
+        # row_ind is sorted [0..D-1]; col_ind is the permutation. For each
+        # dressed state j, the bare index assigned is argsort(col_ind)[j].
+        bare_idx = np.empty_like(col_ind)
+        bare_idx[col_ind] = row_ind
         overlaps = probs[bare_idx, np.arange(probs.shape[1])]
         labels = [basis_labels[k] for k in bare_idx]
 
-        # Reorder so dressed states with the same bare label appear in
-        # ascending energy (energy-sort already does this since we sort
-        # by eigenvalue). Detect duplicate labels and warn via overlap.
         return evals, evecs, labels, overlaps
 
     def _compute_dispersive_matrix_jc(
