@@ -65,3 +65,24 @@ So:
 - **Dispersive shift** — **not** vacuum. It is the response to *real* excitations $n_c$. Empty cavity $\Rightarrow$ no dispersive shift, only the Lamb shift.
 
 **The grain of truth:** the *coefficient* $\chi_{qc}$ is itself set by the zero-point fluctuation *amplitudes* $\varphi_q$, $\varphi_c$ ($\chi_{qc} = \hbar\omega_q\omega_c p_q p_c / 4E_J$, and $\varphi_m^2 \propto$ ZPF). So vacuum sets the *strength* of the knob; real photons are what *turn* it. Strength (vacuum) vs. drive (real photons) — that's the clean split.
+
+---
+
+## Isn't the Lamb shift excitation-dependent (it's built from $\chi$)?
+
+No — the Lamb shift is excitation-*independent*, by construction, even though it is built from the same $\chi_{qc}$ that produces the (excitation-dependent) dispersive shift. The qubit frequency separates cleanly into a constant part and a variable part:
+
+$$\omega_q^{\rm eff}(n_c)=\underbrace{\omega_q-\Delta_q}_{\text{constant: Lamb}}-\underbrace{\chi_{qc}\,n_c}_{\text{variable: dispersive}}.$$
+
+$\Delta_q$ contains no $n$. The resolution to "$\Delta$ is made of $\chi$, so isn't it $n$-dependent?" is to watch how the *same* coefficient splits when it acts on $\hat n+\tfrac12$:
+
+![Lamb (constant) vs dispersive (variable) from the same chi](img/05_lamb_indep.svg)
+
+- the **Lamb shift** is $\chi_{qc}$ acting on the vacuum half-quantum ($n=0\to\tfrac12$) — a constant;
+- the **dispersive shift** is $\chi_{qc}$ acting on the *real* excitation $n$ — variable.
+
+Sharing a coefficient does not transfer the $n$-dependence: $\Delta$ is specifically the $n=0$ piece. Same as the atom — the hydrogen Lamb shift is a fixed splitting from the *vacuum*; shining in real photons adds an AC-Stark shift that *does* depend on intensity, but that is a separate effect on top, not the Lamb shift.
+
+Two corollaries:
+- $\Delta_c=\tfrac12\chi_{qc}$ is $\chi_{qc}$ on the *qubit's* vacuum ($n_q=0$); the $n_q$-dependent readout pull $\chi_{qc}n_q$ is separate, so $\Delta_c$ stays constant.
+- $\Delta_q$ contains $\alpha_q$, and anharmonicity makes $1\!\to\!2$ differ from $0\!\to\!1$ — but "the qubit Lamb shift" is the vacuum renormalization of *one specific transition* (the $0\!\to\!1$), a fixed number. The level-to-level variation is anharmonicity, not the Lamb shift.
