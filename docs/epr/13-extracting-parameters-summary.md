@@ -1,10 +1,8 @@
 # Summary: extracting frequencies, anharmonicity, Lamb shift, dispersion from EPR
 
-Practical recipe for a qubit ($q$) coupled to a resonator ($c$). Self-contained; ties together
-docs 07–12.
+Practical recipe for a qubit ($q$) coupled to a resonator ($c$). Self-contained; ties together docs 07–12.
 
-> Rendering: display equations are pre-rendered images (Warp has no math engine); inline math uses
-> compilable `$...$` (renders in KaTeX/MathJax/GitHub/pandoc, shown raw in Warp).
+> Rendering: display equations are pre-rendered images (Warp has no math engine); inline math uses compilable `$...$` (renders in KaTeX/MathJax/GitHub/pandoc, shown raw in Warp).
 
 ## Notation
 
@@ -30,8 +28,7 @@ docs 07–12.
 
 ## Pipeline
 
-eigenmode sim (HFSS) → `DistributedAnalysis` (gives EPRs $p_{mj}$) →
-`QuantumAnalysis.analyze_all_variations(cos_trunc, fock_trunc)` (gives the fields below).
+eigenmode sim (HFSS) $\to$ `DistributedAnalysis` (gives EPRs $p_{mj}$) $\to$ `QuantumAnalysis.analyze_all_variations(cos_trunc, fock_trunc)` (gives the fields below).
 
 ## How to get each quantity
 
@@ -48,27 +45,19 @@ eigenmode sim (HFSS) → `DistributedAnalysis` (gives EPRs $p_{mj}$) →
 
 ![alpha, chi, Lamb shift formulas](img/13_formulas.svg)
 
-i.e. $\alpha_m=\tfrac12\chi_{mm}$, and $\Delta_m=\omega_m-\tilde\omega_m=\tfrac12\sum_{m'}\chi_{mm'}$,
-with $\chi_{mn}$ built from the participations $p_{mj}$ and junction energies $E_j$.
+i.e. $\alpha_m=\tfrac12\chi_{mm}$, and $\Delta_m=\omega_m-\tilde\omega_m=\tfrac12\sum_{m'}\chi_{mm'}$, with $\chi_{mn}$ built from the participations $p_{mj}$ and junction energies $E_j$.
 
 ## Sign-convention note on the Lamb shift
 
-The paper gives two forms: general $\Delta_m=\tfrac12\sum_{m'}\chi_{mm'}$ (which, with
-$\chi_{qq}=2\alpha_q$, gives $\Delta_q=\alpha_q+\chi_{qc}/2$ for two modes) and the example
-"$\Delta_q=\alpha_q-\chi_{qc}/2$." They differ by the sign of $\chi_{qc}/2$ — a convention wrinkle
-in that sentence. **Use the operational $\Delta_m=$ `f_0 − f_ND`** to avoid it.
+The paper gives two forms: general $\Delta_m=\tfrac12\sum_{m'}\chi_{mm'}$ (which, with $\chi_{qq}=2\alpha_q$, gives $\Delta_q=\alpha_q+\chi_{qc}/2$ for two modes) and the example "$\Delta_q=\alpha_q-\chi_{qc}/2$." They differ by the sign of $\chi_{qc}/2$ — a convention wrinkle in that sentence. **Use the operational $\Delta_m=$ `f_0 − f_ND`** to avoid it.
 
 ## Recommendations
 
-- Prefer `chi_ND` / `f_ND` (numerical) over `chi_O1` / `f_1` unless confirmed deep in the dispersive
-  regime; their gap is the breakdown gauge (doc 07).
+- Prefer `chi_ND` / `f_ND` (numerical) over `chi_O1` / `f_1` unless confirmed deep in the dispersive regime; their gap is the breakdown gauge (doc 07).
 - Get $\Delta_m$ as `f_0 − f_ND`, not from $\alpha,\chi$ (avoids the sign ambiguity above).
 - Verify labeled-state overlaps $\approx 1$ (doc 09); otherwise all of the above are suspect.
 - For truly bare ($g=0$) values, see doc 12 — EPR absorbs $g$ into the eigenmodes.
 
 ## Read in the paper
 
-`f_0` $\leftrightarrow\omega_m$ (Eq. 16/17, "intermediate parameter"); dressed $\omega_m-\Delta_m$
-(Comparison section); $\alpha_m,\chi_{mn}\leftrightarrow$ Eqs. (9)–(12), (26);
-$\Delta_m=\tfrac12\sum_{m'}\chi_{mm'}$ near Eq. (25). Numerical diagonalization $\leftrightarrow$
-ref [20], pyEPR [95].
+`f_0` $\leftrightarrow\omega_m$ (Eq. 16/17, "intermediate parameter"); dressed $\omega_m-\Delta_m$ (Comparison section); $\alpha_m,\chi_{mn}\leftrightarrow$ Eqs. (9)–(12), (26); $\Delta_m=\tfrac12\sum_{m'}\chi_{mm'}$ near Eq. (25). Numerical diagonalization $\leftrightarrow$ ref [20], pyEPR [95].

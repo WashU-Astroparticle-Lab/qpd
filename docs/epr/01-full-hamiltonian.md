@@ -1,7 +1,6 @@
 # The full Hamiltonian $\hat H_{\rm full}$ — term by term
 
-**Source:** Fig. 1c ("complete quantum description") of
-[Minev et al., arXiv:2010.00620](https://arxiv.org/abs/2010.00620).
+**Source:** Fig. 1c ("complete quantum description") of [Minev et al., arXiv:2010.00620](https://arxiv.org/abs/2010.00620).
 
 Cleaned up (with $\hbar=1$, so angular frequencies *are* energies, matching the figure):
 
@@ -12,8 +11,7 @@ $$
 \underbrace{\sum_{\alpha,\beta} C_{\alpha,\beta}\prod_{m}\hat a_m^{\dagger\,\beta_m}\,\hat a_m^{\alpha_m}}_{\text{nonlinear: all orders}}
 $$
 
-Conceptually $\hat H_{\rm full}=\hat H_{\rm lin}+\hat H_{\rm nl}$: the first term is the
-linearized Josephson circuit (plus loss), the second collects everything nonlinear.
+Conceptually $\hat H_{\rm full}=\hat H_{\rm lin}+\hat H_{\rm nl}$: the first term is the linearized Josephson circuit (plus loss), the second collects everything nonlinear.
 
 ---
 
@@ -34,8 +32,7 @@ $$
 \frac{1}{Q_m}=\frac{\kappa_m}{\omega_m}=\sum_\ell \frac{p_{m\ell}}{Q_\ell},
 $$
 
-summing dissipative elements $\ell$ (bulk/surface dielectrics, seams, metals), each weighted
-by its participation $p_{m\ell}$ and intrinsic quality $Q_\ell$.
+summing dissipative elements $\ell$ (bulk/surface dielectrics, seams, metals), each weighted by its participation $p_{m\ell}$ and intrinsic quality $Q_\ell$.
 
 ---
 
@@ -52,8 +49,7 @@ A single compact term holding **every** nonlinear process the junctions mediate.
 | $\prod_m \hat a_m^{\dagger\,\beta_m}\hat a_m^{\alpha_m}$ | a **normal-ordered** monomial (all $\hat a^\dagger$ to the left) — required for the correct treatment of vacuum fluctuations. |
 | $C_{\alpha,\beta}$ | c-number coupling strengths, **fixed entirely by the EPRs**. |
 
-The couplings follow from expanding each junction's nonlinear energy with the flux operator
-written in the mode basis:
+The couplings follow from expanding each junction's nonlinear energy with the flux operator written in the mode basis:
 
 $$
 \hat\varphi_j=\sum_m \varphi_{mj}\left(\hat a_m+\hat a_m^\dagger\right),
@@ -62,8 +58,7 @@ $$
 $$
 
 with EPR sign $s_{mj}=\pm1$. For a tunnel junction
-$E_j^{\rm nl}(\hat\varphi_j)=-E_j\big[\cos\hat\varphi_j-1+\tfrac12\hat\varphi_j^2\big]$, so every
-$C_{\alpha,\beta}$ is a sum of products of the $\varphi_{mj}$ — i.e. **products of $\sqrt{p_{mj}}$**.
+$E_j^{\rm nl}(\hat\varphi_j)=-E_j\big[\cos\hat\varphi_j-1+\tfrac12\hat\varphi_j^2\big]$, so every $C_{\alpha,\beta}$ is a sum of products of the $\varphi_{mj}$ — i.e. **products of $\sqrt{p_{mj}}$**.
 
 **Constraints / selection rules**
 
@@ -74,8 +69,7 @@ $C_{\alpha,\beta}$ is a sum of products of the $\varphi_{mj}$ — i.e. **product
 
 ## Reduction to the familiar Kerr Hamiltonian
 
-Dispersive regime $\to$ keep only **excitation-number-conserving** monomials ($\alpha=\beta$) at
-quartic order. Term 2 becomes Eq. (25):
+Dispersive regime $\to$ keep only **excitation-number-conserving** monomials ($\alpha=\beta$) at quartic order. Term 2 becomes Eq. (25):
 
 $$
 \hat H_{\rm eff}=\sum_m\big(\omega_m-\Delta_m\big)\hat a_m^\dagger\hat a_m
@@ -93,18 +87,13 @@ $$
 \Delta_m=\tfrac12\sum_n\chi_{mn}.
 $$
 
-So $C_{\alpha=\beta}=-\alpha_m/2$ for the $\hat a_m^{\dagger2}\hat a_m^2$ monomial and $-\chi_{mn}$
-for the $\hat n_m\hat n_n$ monomial.
+So $C_{\alpha=\beta}=-\alpha_m/2$ for the $\hat a_m^{\dagger2}\hat a_m^2$ monomial and $-\chi_{mn}$ for the $\hat n_m\hat n_n$ monomial.
 
 ---
 
 ## Where this lives in code (`qiskit-metal` / `pyEPR`)
 
-- **Term 1 frequencies & losses** — eigenmode solve + `calc_energy_electric/magnetic`
-  (`renderer_ansys/ansys_renderer.py`), loss EPRs from the `dissipatives` dict.
-- **Term 2, all orders** — `pyEPR.QuantumAnalysis.analyze_all_variations(cos_trunc, fock_trunc)`
-  keeps the full cosine numerically rather than truncating to the quartic $\chi$ formula.
+- **Term 1 frequencies & losses** — eigenmode solve + `calc_energy_electric/magnetic` (`renderer_ansys/ansys_renderer.py`), loss EPRs from the `dissipatives` dict.
+- **Term 2, all orders** — `pyEPR.QuantumAnalysis.analyze_all_variations(cos_trunc, fock_trunc)` keeps the full cosine numerically rather than truncating to the quartic $\chi$ formula.
 
-**Punchline:** Term 1 says *where the energy sits and how fast it leaks*; Term 2 says *how the
-modes talk* — and **all** of it ($\omega_m',\kappa_m,C_{\alpha,\beta}$) is set by the EPRs
-$p_{mj}$, $p_{m\ell}$ and signs $s_{mj}$ from a single eigenmode solve.
+**Punchline:** Term 1 says *where the energy sits and how fast it leaks*; Term 2 says *how the modes talk* — and **all** of it ($\omega_m',\kappa_m,C_{\alpha,\beta}$) is set by the EPRs $p_{mj}$, $p_{m\ell}$ and signs $s_{mj}$ from a single eigenmode solve.
