@@ -25,6 +25,7 @@ _(entries added as questions are answered)_
 | 13 | **Summary:** extracting freq / anharmonicity / Lamb shift / dispersion from EPR (+pyEPR fields) | [13-extracting-parameters-summary.md](13-extracting-parameters-summary.md) |
 | 14 | Intro to the Kerr Hamiltonian — demystifying self-Kerr/cross-Kerr/anharmonicity jargon | [14-kerr-hamiltonian-intro.md](14-kerr-hamiltonian-intro.md) |
 | 15 | Physical origin of the Lamb shift (vacuum dressing via the nonlinearity) | [15-lamb-shift-physical-origin.md](15-lamb-shift-physical-origin.md) |
+| 16 | Extracting $E_J$ and $E_C$ from an EPR analysis (invert $f_{01}, \alpha$) | [16-extracting-EJ-EC.md](16-extracting-EJ-EC.md) |
 
 ## Rendering note
 
