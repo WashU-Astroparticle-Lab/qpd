@@ -28,6 +28,7 @@ _(entries added as questions are answered)_
 | 16 | Extracting $E_J$ and $E_C$ from an EPR analysis (invert $f_{01}, \alpha$) | [16-extracting-EJ-EC.md](16-extracting-EJ-EC.md) |
 | 17 | What approximations make the constant-$g$ Rabi/JC coupling valid? | [17-rabi-model-approximations.md](17-rabi-model-approximations.md) |
 | 18 | Beyond-dipole CPW↔JJ coupling, and why its linearized part is captured by HFSS (linear → HFSS, nonlinear → EPR) | [18-beyond-dipole-coupling-and-hfss.md](18-beyond-dipole-coupling-and-hfss.md) |
+| 19 | Q3D LOM analysis: Maxwell cap matrix → $E_C$ for a QPD (one qubit + one resonator); HFSS vs Q3D comparison | [19-q3d-lom-analysis.md](19-q3d-lom-analysis.md) |
 
 ## Rendering note
 
