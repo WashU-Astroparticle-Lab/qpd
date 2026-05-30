@@ -27,6 +27,7 @@ _(entries added as questions are answered)_
 | 15 | Physical origin of the Lamb shift (vacuum dressing via the nonlinearity) | [15-lamb-shift-physical-origin.md](15-lamb-shift-physical-origin.md) |
 | 16 | Extracting $E_J$ and $E_C$ from an EPR analysis (invert $f_{01}, \alpha$) | [16-extracting-EJ-EC.md](16-extracting-EJ-EC.md) |
 | 17 | What approximations make the constant-$g$ Rabi/JC coupling valid? | [17-rabi-model-approximations.md](17-rabi-model-approximations.md) |
+| 18 | Beyond-dipole CPW↔JJ coupling, and why its linearized part is captured by HFSS (linear → HFSS, nonlinear → EPR) | [18-beyond-dipole-coupling-and-hfss.md](18-beyond-dipole-coupling-and-hfss.md) |
 
 ## Rendering note
 
