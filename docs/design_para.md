@@ -45,8 +45,9 @@ n_{\rm zpf} = \frac{1}{2}\Big(\frac{E_J}{2E_C}\Big)^{1/4},
 $$
 
 with $\hat\varphi_J = \varphi_{\rm zpf}(\hat b + \hat b^\dagger)$ and
-$\hat n = i n_{\rm zpf}(\hat b^\dagger - \hat b)$ (charge is the *momentum*
-quadrature — this is why capacitive coupling lands on $(\hat b^\dagger - \hat b)$).
+$\hat n = i n_{\rm zpf}(\hat b^\dagger - \hat b)$. Charge is the *momentum*
+quadrature, which is why capacitive coupling lands on the antisymmetric
+combination $\hat b^\dagger - \hat b$ rather than $\hat b + \hat b^\dagger$.
 The linearized coupling is $\tilde g (\hat b^\dagger-\hat b)(\hat a+\hat a^\dagger)$
 with $\tilde g = g n_{\rm zpf}$, and the normal-mode frequencies are
 
