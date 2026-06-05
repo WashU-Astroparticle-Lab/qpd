@@ -48,6 +48,9 @@ with $\hat\varphi_J = \varphi_{\rm zpf}(\hat b + \hat b^\dagger)$ and
 $\hat n = i n_{\rm zpf}(\hat b^\dagger - \hat b)$. Charge is the *momentum*
 quadrature, which is why capacitive coupling lands on the antisymmetric
 combination $\hat b^\dagger - \hat b$ rather than $\hat b + \hat b^\dagger$.
+Here $\hat\varphi_J$ is the junction phase $\hat\varphi$ of the CPB, now written in
+the harmonic representation (it picks up the higher powers of the cosine only when
+the nonlinearity is restored).
 The linearized coupling is $\tilde g (\hat b^\dagger-\hat b)(\hat a+\hat a^\dagger)$
 with $\tilde g = g n_{\rm zpf}$, and the normal-mode frequencies are
 
@@ -240,34 +243,45 @@ bilinear capacitive coupling), both methods recover the *same* $(E_C,g,\omega_r)
 This is forced by the transmon having a single $E_C$ that simultaneously sets the
 capacitance (LOM) and the junction zpf / anharmonicity (EPR).
 
-**In practice they differ — and the gap is informative, not noise.** The two
-methods rest on physically different inputs (dynamic eigenmodes vs. static
-capacitance) and approximate reality differently:
+**Which is more fundamental? — EPR.** Run to full convergence, EPR is the more
+fundamental linear extraction. It solves the true full-wave linear Maxwell problem
+and reads off the exact spectrum $\Omega_\pm$ and participations $p_\pm$; all of its
+approximations — the number of modes kept in $\omega_q = \sum_m p_m\Omega_m$, the
+mesh, and the (removable) RWA in the sum rule — are *convergence-controllable* and
+vanish with effort. LOM instead builds a lumped LC + transmission-line circuit from a
+*quasistatic* capacitance solve, and that quasistatic/lumped reduction is a
+**structural** approximation that does **not** vanish with mesh refinement. Note that
+the 2-mode reduction is shared by both methods, and the cosine truncation is not used
+in the linear participation route — so neither makes EPR rougher. In principle EPR is
+at least as faithful as LOM, and more so.
 
-- **Multimode / distributed structure.** The real chip has many modes; the junction
-  participates a little in all of them. LOM's electrostatic $C_\Sigma$ sums *all*
-  electrostatic contributions; a 2-mode EPR sum rule misses higher-mode terms (so
-  $\omega_q = \sum_m p_m\Omega_m$ truncated to two modes *underestimates* $E_C$).
-- **Static vs. dynamic.** LOM's $E_C$ is a DC capacitance; EPR's is read off the AC
-  response at the mode frequency. They coincide only insofar as the lumped,
-  frequency-independent picture holds.
-- **Convention.** Each method fixes the bare/dressed split in its own consistent
-  way. Numbers are only comparable when each method's $(E_C,\omega_r,g)$ is used as
-  a self-consistent triple.
+**Then why ever use LOM? — purely practical.** EPR's fidelity must be paid for: a
+full-wave eigenmode solve is expensive, and you need *many* modes, because the
+high-frequency tail of $\omega_q = \sum_m p_m\Omega_m$ converges slowly — and that
+tail is exactly what fixes $E_C$. An under-converged EPR run therefore *underestimates*
+$E_C$. LOM's electrostatic $E_C = e^2/2C_\Sigma$ captures all electrostatic
+contributions in one cheap, well-converged solve. So the reason to reach for LOM is
+**cost and convergence — most acutely for $E_C$ — not any fundamental superiority.**
+
+**Convention — how to read a disagreement, not a tiebreaker.** The bare parameters
+$\omega_r$ and $g$ are not physical observables; only the spectrum and participations
+are. Both methods fix a bare/dressed convention to repackage the same physics, and
+those conventions need not be identical, so part of any LOM-vs-EPR gap is convention
+rather than error. This affects *interpretation*; because both methods share it, it
+favors neither.
 
 **How to act on a discrepancy:**
 
-- *Small* (few %, comparable to $E_C/E_J$ and to higher-mode participation): your
-  2-mode lumped Hamiltonian is faithful. Use either set; average if you wish.
-- *Large*: the 2-mode model is missing something — extra modes (package, slotline,
-  higher harmonics), distributed effects, or junction non-ideality. Trust LOM for
-  the *structural* $E_C$, trust converged multimode EPR (high `cos_trunc`, all
-  relevant modes) for the *spectroscopic* quantities, and treat the gap as a
-  quantitative measure of model incompleteness.
+- *Small*: your 2-mode lumped Hamiltonian is faithful and EPR is well converged. Use
+  either set.
+- *Large*: either EPR has not converged (add modes, refine the mesh — check the $E_C$
+  tail first) or the device has structure beyond the 2-mode model (extra
+  package/slotline modes, junction non-ideality). Rule out EPR convergence before
+  reading the residual as genuine model incompleteness.
 
-> **Rule of thumb:** run *both* and compare. Agreement validates the lumped
-> Hamiltonian; disagreement *quantifies* the multimode/distributed error you would
-> otherwise never see.
+> **Rule of thumb:** run *both* and compare. Agreement bounds *both* your model error
+> *and* your EPR convergence; disagreement tells you to add modes or enrich the model.
+> The cross-check is the value — it is not an argument for preferring one method.
 
 ---
 
@@ -282,13 +296,14 @@ capacitance) and approximate reality differently:
 | **Source of $\omega_r$** | Inversion of $\Omega_\pm$ (after $\omega_q$ fixed) | Resonator $L_r$ + diagonal $C$ (TL model) |
 | **Source of $g$** | Mode gap $\tilde g=\tfrac12\sqrt{(\Omega_+-\Omega_-)^2-(\omega_q-\omega_r)^2}$ | Off-diagonal $C_c$ + zero-point voltages |
 | **Linear coupling $g$** | Treated **exactly** (eigenmodes already hybridized) | Treated **exactly** (full $C$-matrix) |
-| **Multimode physics** | Captured if you include the modes (truncation = error) | Electrostatics all-mode; resonator via single TL mode |
+| **Multimode physics** | Captured exactly, but the high-mode tail (sets $E_C$) converges slowly | Electrostatics all-mode; resonator via single TL mode |
 | **Distributed fields** | Native (full-wave) | Approximated (lumped + TL) |
-| **Key approximation** | 2-mode truncation; RWA in sum rule (small $\tilde g/\omega$) | Lumped, frequency-independent capacitance |
+| **Key approximation** | Convergence-controllable: mode count in sum rule, mesh, removable RWA | Structural: quasistatic + lumped/TL reduction (does not vanish with mesh) |
+| **In-principle fidelity** | Higher (full-wave; approximations vanish on convergence) | Lower (quasistatic/lumped error is irreducible) |
 | **Anharmonicity / $\chi$** | Yes — via `cos_trunc` diagonalization | Yes — via Kerr from $C$-matrix (`chi_in_MHz`) |
 | **Convention dependence** | Bare = junction-bearing mode (set by participations) | Bare = node basis of the $C$-matrix |
 | **qiskit-metal class** | `EPRanalysis` (+ `EigenmodeSim`) | `LOManalysis` (+ `LumpedElementsSim`) |
-| **Best trusted for** | Spectroscopic quantities, multimode/distributed regimes | Structural $E_C$, fast design iteration |
+| **Best trusted for** | Most faithful when converged; spectroscopic physics; distributed/multimode regimes | Cheap, robust, well-converged — especially $E_C$; fast design iteration |
 
 ---
 
@@ -299,8 +314,9 @@ capacitance) and approximate reality differently:
 2. **EPR second** (full-wave): get $\Omega_\pm$ and $p_\pm$; extract
    $(E_C,\omega_r,g)$ via the participation sum rule, and the anharmonic physics via
    `cos_trunc` diagonalization.
-3. **Compare** the two $(E_C,g,\omega_r)$ triples. Use the agreement as validation
-   and the discrepancy as your model-error bar.
+3. **Compare** the two $(E_C,g,\omega_r)$ triples. Use the agreement as validation;
+   read a discrepancy as a combined EPR-convergence and model-error bar (check the
+   EPR mode count first).
 4. **Use the chosen triple** in the bare-basis Hamiltonian of Section 1 (with the
    full cosine, not the linearized form) to compute whatever physics you need.
 
