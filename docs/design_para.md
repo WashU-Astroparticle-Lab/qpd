@@ -52,7 +52,9 @@ Here $\hat\varphi_J$ is the junction phase $\hat\varphi$ of the CPB, now written
 the harmonic representation (it picks up the higher powers of the cosine only when
 the nonlinearity is restored).
 The linearized coupling is $\tilde g (\hat b^\dagger-\hat b)(\hat a+\hat a^\dagger)$
-with $\tilde g = g n_{\rm zpf}$, and the normal-mode frequencies are
+with $\tilde g = g n_{\rm zpf}$ (the offset charge $n_g$ contributes only a static
+$-g n_g(\hat a+\hat a^\dagger)$ resonator displacement, which drops out of the
+mode structure and all formulas below). The normal-mode frequencies are
 
 $$
 \Omega_\pm^2 = \frac{\omega_r^2+\omega_q^2}{2}
@@ -156,15 +158,17 @@ with RWA gap form $\tilde g = \tfrac12\sqrt{(\Omega_+-\Omega_-)^2 - (\omega_q-\o
 ### Built-in consistency check
 
 You measured four numbers $(\Omega_\pm, p_\pm)$ but used three combinations; the
-fourth tests the 2-mode model. The exact participation ratio must match ($+/-$ = the
-higher/lower-frequency mode):
+fourth tests the 2-mode model. Plugging the extracted $\omega_r$ into the exact
+participation ratio must reproduce the measured one ($+/-$ = the higher/lower-frequency
+mode):
 
 $$
 \boxed{\frac{p_+\Omega_+}{p_-\Omega_-} = \frac{\Omega_+(\Omega_+^2 - \omega_r^2)}{\Omega_-(\omega_r^2 - \Omega_-^2)}}
 $$
 
-which in the RWA reduces to $\cot^2\theta$ with $\tan 2\theta = 2\tilde g/(\omega_q-\omega_r)$.
 Disagreement signals that higher modes participate (the 2-mode reduction is leaking).
+(There is no clean $\cot^2\theta$ dispersive form here — the counter-rotating terms
+shift it at the same order — so use the exact ratio directly.)
 
 ### Equivalent variants (same data, same answer)
 
