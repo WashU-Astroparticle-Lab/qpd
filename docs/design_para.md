@@ -95,12 +95,30 @@ p_m = \frac{2 E_J \varphi_{J,m}^2}{\hbar\omega_m}
 \varphi_{J,m}^2 = \frac{p_m \hbar\omega_m}{2E_J}.
 $$
 
-**(ii) Conservation of the junction zpf (orthogonal/RWA limit).** Because the
-bare→normal transformation preserves $\sum_m u_m^2 = 1$,
+**(ii) Conservation of the junction zpf (orthogonal/RWA limit).** The junction sits
+entirely on the bare qubit, so the junction phase *is* the bare-qubit phase,
+$\hat\varphi_J = \varphi_{\rm zpf}(\hat b + \hat b^\dagger)$. Its scale is the
+transmon's zero-point fluctuation: from the harmonic CPB — an oscillator with
+"mass" $1/8E_C$ and frequency $\omega_q = \sqrt{8E_CE_J}$ — the ground-state position
+variance is
 
 $$
-\sum_m \varphi_{J,m}^2 = \varphi_{\rm zpf}^2 = \sqrt{\frac{2E_C}{E_J}}.
+\varphi_{\rm zpf}^2 = \langle 0|\hat\varphi^2|0\rangle = \frac{1}{2 m \omega_q} = \sqrt{\frac{2E_C}{E_J}}.
 $$
+
+Hybridization is a number-conserving (RWA) beam-splitter, so the bare→normal map is
+an **orthogonal** rotation $\hat b = \sum_m u_m\hat c_m$ with $\sum_m u_m^2 = 1$. It
+merely *redistributes* the bare-qubit phase among the dressed modes,
+$\varphi_{J,m} = \varphi_{\rm zpf} u_m$, and an orthogonal rotation preserves the
+total — so the junction zpf is conserved:
+
+$$
+\sum_m \varphi_{J,m}^2 = \varphi_{\rm zpf}^2 \sum_m u_m^2 = \varphi_{\rm zpf}^2 = \sqrt{\frac{2E_C}{E_J}}.
+$$
+
+With counter-rotating terms the map is symplectic and the ground state is squeezed,
+so this conservation acquires an $O((\tilde g/\omega)^2)$ correction; the exact,
+RWA-free replacement is derived in Appendix A.
 
 ### The third equation: the participation sum rule
 
@@ -394,7 +412,7 @@ $$
 The symplectic norm $N_m=\mathbf v^\dagger(i \Omega_{\rm sympl})\mathbf v$ is
 
 $$
-N_m=2\Omega_m\!\left[\frac{4\tilde g^2\omega_r}{(\omega_r^2-\Omega_m^2)^2}+\frac{1}{\omega_q}\right],
+N_m=2\Omega_m\left[\frac{4\tilde g^2\omega_r}{(\omega_r^2-\Omega_m^2)^2}+\frac{1}{\omega_q}\right],
 $$
 
 so each mode contributes $|x_b|^2/N_m$ to $\langle x_b^2\rangle$. Using the
@@ -441,8 +459,9 @@ $$
 $$
 
 Every input is an observable ($\Omega_\pm$, $p_\pm$); no RWA enters. The recovered
-bare parameters correspond to the charge-basis (diagonal-$C^{-1}$) convention, which
-is the same split the Section-2 formulas converge to in the dispersive limit.
+bare parameters sit in the charge-basis convention — the split built from the
+diagonal of $C^{-1}$ — which is the same one the Section-2 formulas converge to in
+the dispersive limit.
 
 ### A.5 What is still approximate
 
