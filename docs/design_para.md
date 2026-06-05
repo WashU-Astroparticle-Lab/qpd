@@ -95,10 +95,10 @@ p_m = \frac{2 E_J \varphi_{J,m}^2}{\hbar\omega_m}
 \varphi_{J,m}^2 = \frac{p_m \hbar\omega_m}{2E_J}.
 $$
 
-**(ii) Conservation of the junction zpf (orthogonal/RWA limit).** The junction sits
-entirely on the bare qubit, so the junction phase *is* the bare-qubit phase,
-$\hat\varphi_J = \varphi_{\rm zpf}(\hat b + \hat b^\dagger)$. Its scale is the
-transmon's zero-point fluctuation: from the harmonic CPB — an oscillator with
+**(ii) The junction zpf is shared among the modes.** The junction sits entirely on
+the bare qubit, so the junction phase *is* the bare-qubit phase,
+$\hat\varphi_J = \varphi_{\rm zpf}(\hat b + \hat b^\dagger)$, whose scale is the
+bare-transmon zero-point fluctuation: from the harmonic CPB — an oscillator with
 "mass" $1/8E_C$ and frequency $\omega_q = \sqrt{8E_CE_J}$ — the ground-state position
 variance is
 
@@ -106,58 +106,64 @@ $$
 \varphi_{\rm zpf}^2 = \langle 0|\hat\varphi^2|0\rangle = \frac{1}{2 m \omega_q} = \sqrt{\frac{2E_C}{E_J}}.
 $$
 
-Hybridization is a number-conserving (RWA) beam-splitter, so the bare→normal map is
-an **orthogonal** rotation $\hat b = \sum_m u_m\hat c_m$ with $\sum_m u_m^2 = 1$. It
-merely *redistributes* the bare-qubit phase among the dressed modes,
-$\varphi_{J,m} = \varphi_{\rm zpf} u_m$, and an orthogonal rotation preserves the
-total — so the junction zpf is conserved:
+Hybridization redistributes this phase among the dressed modes,
+$\hat\varphi_J = \sum_m \varphi_{J,m}(\hat c_m + \hat c_m^\dagger)$, so the total
+junction zpf equals the junction-phase variance of the *coupled* ground state:
 
 $$
-\sum_m \varphi_{J,m}^2 = \varphi_{\rm zpf}^2 \sum_m u_m^2 = \varphi_{\rm zpf}^2 = \sqrt{\frac{2E_C}{E_J}}.
+\sum_m \varphi_{J,m}^2 = \langle\hat\varphi_J^2\rangle = 2\varphi_{\rm zpf}^2\langle x_b^2\rangle,
+\qquad \langle x_b^2\rangle = \frac{\omega_q^2 + \Omega_+\Omega_-}{2\omega_q(\Omega_+ + \Omega_-)}
 $$
 
-With counter-rotating terms the map is symplectic and the ground state is squeezed,
-so this conservation acquires an $O((\tilde g/\omega)^2)$ correction; the exact,
-RWA-free replacement is derived in Appendix A.
+(the junction-flux quadrature variance $\langle x_b^2\rangle$ is derived in
+Appendix A). In the dispersive/RWA limit the bare→normal map is an orthogonal
+rotation $\hat b = \sum_m u_m\hat c_m$ with $\sum_m u_m^2 = 1$, so
+$\langle x_b^2\rangle\to\tfrac12$ and this collapses to the conserved value
+$\sum_m \varphi_{J,m}^2 = \varphi_{\rm zpf}^2$.
 
 ### The third equation: the participation sum rule
 
-Combining (i) and (ii) gives a remarkably clean result — **the bare qubit frequency
-is the participation-weighted average of the dressed frequencies:**
+Inserting (i) into the variance above fixes the bare qubit frequency. Boxed in exact
+form, with the RWA reduction beside it:
 
 $$
-\boxed{\omega_q = \sum_m p_m \Omega_m,
-\qquad
-E_C = \frac{(\hbar\omega_q)^2}{8 E_J} = \frac{\hbar^2\big(\sum_m p_m\Omega_m\big)^2}{8 E_J}}
+\boxed{\omega_q^2 = (\Omega_+ + \Omega_-)\sum_m p_m\Omega_m - \Omega_+\Omega_-,
+\qquad E_C = \frac{(\hbar\omega_q)^2}{8E_J}}
 $$
 
-This single equation is what the linear spectrum lacked. The $p_m$ supply the
-absolute junction zpf scale — i.e. $E_C$ — that the eigenfrequencies alone cannot.
+Equivalently $\sum_m p_m\Omega_m = (\omega_q^2+\Omega_+\Omega_-)/(\Omega_++\Omega_-)$;
+in the dispersive/RWA limit this is the clean weighted average
+$\omega_q = \sum_m p_m\Omega_m$. The $p_m$ supply the absolute junction zpf scale —
+i.e. $E_C$ — that the eigenfrequencies alone cannot.
 
 ### Finishing $\omega_r$ and $g$
 
-With $\omega_q$ known, the remaining two parameters drop out of $\Omega_\pm$:
+With $\omega_q$ known, the other two parameters follow from $\Omega_\pm$ — again boxed
+exact, RWA beside:
 
 $$
-\omega_r = \Omega_+ + \Omega_- - \omega_q
-\quad\text{(RWA trace; exact: } \omega_r^2 = \Omega_+^2+\Omega_-^2-\omega_q^2),
+\boxed{\omega_r^2 = \Omega_+^2 + \Omega_-^2 - \omega_q^2}
+\qquad\text{(RWA: } \omega_r = \Omega_+ + \Omega_- - \omega_q),
 $$
 
 $$
-\tilde g = \tfrac12\sqrt{(\Omega_+-\Omega_-)^2 - (\omega_q-\omega_r)^2},
-\qquad g = \frac{\tilde g}{n_{\rm zpf}}.
+\boxed{\tilde g^2 = \frac{\omega_r^2\omega_q^2 - \Omega_+^2\Omega_-^2}{4\omega_r\omega_q},
+\qquad g = \frac{\tilde g}{n_{\rm zpf}}}
 $$
+
+with RWA gap form $\tilde g = \tfrac12\sqrt{(\Omega_+-\Omega_-)^2 - (\omega_q-\omega_r)^2}$.
 
 ### Built-in consistency check
 
-You measured four numbers $(\Omega_\pm, p_\pm)$ but used three combinations. The
-fourth checks the 2-mode model: the participation **ratio** must agree with the
-mixing angle implied by $(\omega_q,\omega_r,\tilde g)$,
+You measured four numbers $(\Omega_\pm, p_\pm)$ but used three combinations; the
+fourth tests the 2-mode model. The exact participation ratio must match ($+/-$ = the
+higher/lower-frequency mode):
 
 $$
-\frac{p_{\rm qubit\text{-}like} \Omega_{\rm qubit\text{-}like}}{p_{\rm res\text{-}like} \Omega_{\rm res\text{-}like}} = \cot^2\theta\Big|_{\tan 2\theta = 2\tilde g/(\omega_q-\omega_r)}.
+\boxed{\frac{p_+\Omega_+}{p_-\Omega_-} = \frac{\Omega_+(\Omega_+^2 - \omega_r^2)}{\Omega_-(\omega_r^2 - \Omega_-^2)}}
 $$
 
+which in the RWA reduces to $\cot^2\theta$ with $\tan 2\theta = 2\tilde g/(\omega_q-\omega_r)$.
 Disagreement signals that higher modes participate (the 2-mode reduction is leaking).
 
 ### Equivalent variants (same data, same answer)
@@ -309,7 +315,7 @@ favors neither.
 |---|---|---|
 | **Primary simulation** | Full-wave eigenmode (HFSS) | Electrostatic capacitance matrix (Q3D / Elmer) |
 | **Raw observables** | $\Omega_\pm$ and junction participations $p_\pm$ | Maxwell capacitance matrix $C_{ij}$ (+ $L_J$) |
-| **Third equation for $E_C$** | Participation sum rule $\omega_q=\sum_m p_m\Omega_m$ | Self-capacitance $E_C=e^2/2C_\Sigma$ |
+| **Third equation for $E_C$** | Participation sum rule (exact in App A; dispersive form $\omega_q=\sum_m p_m\Omega_m$) | Self-capacitance $E_C=e^2/2C_\Sigma$ |
 | **Nature of $E_C$** | Dynamic (AC, mode-frequency response) | Static (DC capacitance) |
 | **Source of $\omega_r$** | Inversion of $\Omega_\pm$ (after $\omega_q$ fixed) | Resonator $L_r$ + diagonal $C$ (TL model) |
 | **Source of $g$** | Mode gap $\tilde g=\tfrac12\sqrt{(\Omega_+-\Omega_-)^2-(\omega_q-\omega_r)^2}$ | Off-diagonal $C_c$ + zero-point voltages |
@@ -340,6 +346,30 @@ favors neither.
 
 ---
 
+## 7. Conclusion
+
+Method A (EPR) is the more fundamental route, so — computational cost aside — take a
+single eigenmode solve returning the dressed frequencies $\Omega_\pm$ and junction
+participations $p_\pm$, with $E_J$ known, and apply the exact (RWA-free) extraction:
+
+$$
+\omega_q^2 = (\Omega_+ + \Omega_-)(p_+\Omega_+ + p_-\Omega_-) - \Omega_+\Omega_-,
+\qquad E_C = \frac{(\hbar\omega_q)^2}{8E_J},
+$$
+
+$$
+\omega_r^2 = \Omega_+^2 + \Omega_-^2 - \omega_q^2,
+$$
+
+$$
+\tilde g^2 = \frac{\omega_r^2\omega_q^2 - \Omega_+^2\Omega_-^2}{4\omega_r\omega_q},
+\qquad g = \frac{\tilde g}{n_{\rm zpf}},\quad n_{\rm zpf} = \tfrac12\Big(\frac{E_J}{2E_C}\Big)^{1/4}.
+$$
+
+Read top to bottom: $\{\Omega_\pm, p_\pm\}\to\omega_q\to E_C\to\omega_r\to\tilde g\to g$.
+
+---
+
 ### Symbol reference
 
 | Symbol | Meaning |
@@ -357,14 +387,14 @@ favors neither.
 
 ## Appendix A. RWA-free (exact) extraction
 
-The Section-2 recipe used the RWA in one place only: the sum rule
-$\sum_m p_m\Omega_m=\omega_q$, which rested on the junction-zpf *conservation*
-$\sum_m\varphi_{J,m}^2=\varphi_{\rm zpf}^2$ (valid for an orthogonal, i.e. RWA,
-bare-to-normal map). The two Vieta relations were already exact. Here we replace
-that one step by its exact counterpart and obtain a fully RWA-free, closed-form
-extraction. (Every formula below was checked against exact Fock-space
-diagonalization and an honest capacitively-coupled circuit, agreeing to machine
-precision from weak coupling through strong coupling.)
+This appendix derives the exact (RWA-free) formulas boxed in Section 2. The RWA
+entered the recipe in one place only: the junction-zpf *conservation*
+$\sum_m\varphi_{J,m}^2=\varphi_{\rm zpf}^2$, valid for an orthogonal (RWA)
+bare-to-normal map. Its exact counterpart is the junction-phase variance in the
+squeezed coupled ground state, $\sum_m\varphi_{J,m}^2=2\varphi_{\rm zpf}^2\langle x_b^2\rangle$,
+computed below; the two Vieta relations were already exact. (Every formula was
+checked against exact Fock-space diagonalization and an honest capacitively-coupled
+circuit, agreeing to machine precision from weak through strong coupling.)
 
 ### A.1 Setup
 
