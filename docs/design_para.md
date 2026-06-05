@@ -11,9 +11,9 @@ how to interpret the (generally different) numbers they produce.
 We want the parameters of the **bare qubit + bare resonator + coupling** Hamiltonian
 
 $$
-\frac{\hat H}{\hbar} = \sum_i \omega_{q,i} |i\rangle\langle i|\otimes \mathbb{1}_r
- + \omega_r \mathbb{1}_q\otimes \hat a^\dagger \hat a
- + g (\hat n - n_g)_q \otimes (\hat a + \hat a^\dagger),
+\frac{\hat H}{\hbar} = \sum_i \omega_{q,i} |i\rangle\langle i|\otimes \mathbb{1}_r +
+\omega_r \mathbb{1}_q\otimes \hat a^\dagger \hat a +
+g (\hat n - n_g)_q \otimes (\hat a + \hat a^\dagger),
 $$
 
 where the transmon is a Cooper-pair box (CPB)
@@ -106,8 +106,7 @@ is the participation-weighted average of the dressed frequencies:**
 $$
 \boxed{\omega_q = \sum_m p_m \Omega_m,
 \qquad
-E_C = \frac{(\hbar\omega_q)^2}{8 E_J}
-= \frac{\hbar^2\big(\sum_m p_m\Omega_m\big)^2}{8 E_J}}
+E_C = \frac{(\hbar\omega_q)^2}{8 E_J} = \frac{\hbar^2\big(\sum_m p_m\Omega_m\big)^2}{8 E_J}}
 $$
 
 This single equation is what the linear spectrum lacked. The $p_m$ supply the
@@ -134,9 +133,7 @@ fourth checks the 2-mode model: the participation **ratio** must agree with the
 mixing angle implied by $(\omega_q,\omega_r,\tilde g)$,
 
 $$
-\frac{p_{\rm qubit\text{-}like} \Omega_{\rm qubit\text{-}like}}
-     {p_{\rm res\text{-}like} \Omega_{\rm res\text{-}like}}
-= \cot^2\theta\Big|_{\tan 2\theta = 2\tilde g/(\omega_q-\omega_r)}.
+\frac{p_{\rm qubit\text{-}like} \Omega_{\rm qubit\text{-}like}}{p_{\rm res\text{-}like} \Omega_{\rm res\text{-}like}} = \cot^2\theta\Big|_{\tan 2\theta = 2\tilde g/(\omega_q-\omega_r)}.
 $$
 
 Disagreement signals that higher modes participate (the 2-mode reduction is leaking).
