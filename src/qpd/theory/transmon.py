@@ -846,6 +846,190 @@ class QPD:
 
         return dressed, chi_n_hz, qubit_stark_hz
 
+    # ------------------------------------------------------------------
+    # Transmission / readout spectrum (label-free, matrix-element based)
+    # ------------------------------------------------------------------
+
+    def _resonator_response_peaks(self, offset_charge, coupling_g_hz,
+                                  readout_freq_hz, parity, n_bar,
+                                  n_qubit, n_photon, rwa, charge_cutoff):
+        """
+        Transition frequencies and bare-photon spectral weights from the
+        populated initial dressed state, for the full hybridized
+        Hamiltonian.
+
+        The readout feedline couples to the *bare* resonator field
+        ``â + â†`` (it sits at the resonator, far from the junction), so
+        the weak-probe transmission is set by the resonator response
+
+            S(ω) ∝ Σ_f |⟨f|(â + â†)|i⟩|² · L_κ(ω − (E_f − E_i)),
+
+        with {|f⟩, E_f} the eigenstates of the *full* qubit⊗resonator
+        Hamiltonian (no bare-state labeling) and |i⟩ the populated
+        initial dressed state — here the qubit-ground, n̄-photon state.
+
+        Returns
+        -------
+        freqs_hz : ndarray, shape (D,)
+            E_f − E_i for every dressed state f [Hz] (signed).
+        weights : ndarray, shape (D,)
+            |⟨f|(â + â†)|i⟩|² (un-normalized).
+        init_overlap : float
+            Bare-state overlap of the chosen initial state with |0, n̄⟩.
+        """
+        evals, evecs, labels, overlaps = self.solve_jc_eigensystem(
+            offset_charge, coupling_g_hz, readout_freq_hz,
+            parity=parity, n_qubit=n_qubit, n_photon=n_photon,
+            rwa=rwa, charge_cutoff=charge_cutoff,
+        )
+        # Initial state |i⟩: lowest-energy dressed state labeled (0, n̄) —
+        # the qubit-ground, n̄-photon state the drive populates. (For
+        # n̄ = 0 this is just the global ground state.)
+        init_idx = next(
+            (k for k, lab in enumerate(labels) if lab == (0, n_bar)), None
+        )
+        if init_idx is None:
+            raise RuntimeError(
+                f"No dressed state labels onto bare |0,{n_bar}⟩; increase "
+                "n_qubit/n_photon, or n̄ may sit on a strong anticrossing."
+            )
+        n_fock = n_photon + 1
+        a = np.diag(np.sqrt(np.arange(1, n_fock)), k=1)
+        A = np.kron(np.eye(n_qubit), a + a.T)          # â + â† (joint basis)
+        m = evecs.conj().T @ (A @ evecs[:, init_idx])  # ⟨f|(â+â†)|i⟩
+        weights = np.abs(m) ** 2
+        freqs_hz = evals - evals[init_idx]
+        return freqs_hz, weights, float(overlaps[init_idx])
+
+    def compute_transmission_spectrum(self, offset_charge, coupling_g_hz,
+                                      readout_freq_hz, parity='odd',
+                                      n_bar=0, n_qubit=8, n_photon=8,
+                                      rwa=False, charge_cutoff=30,
+                                      weight_rtol=1e-2, single_peak_frac=0.9,
+                                      freq_window_hz=None,
+                                      check_convergence=True,
+                                      conv_tol_hz=1e5):
+        """
+        Predict the (low-power) transmission spectrum of the readout
+        resonator from the full hybridized qubit⊗resonator Hamiltonian.
+
+        Unlike the dispersive shift χᵢ,ₚ obtained by *labeling* a dressed
+        state (``method='jc'`` in :meth:`compute_dispersive_matrix`), this
+        is **label-free**: it diagonalizes the full Hamiltonian and reads
+        off the resonator response (see :meth:`_resonator_response_peaks`).
+        Peaks sit at the dressed transition frequencies E_f − E_i and are
+        weighted by the bare-photon matrix element |⟨f|â+â†|i⟩|² from the
+        populated state |i⟩ = (qubit ground, n̄ photons). The *observed*
+        dispersive shift is then ``f_peak − ωᵣ``, with no reliance on the
+        bare ↔ dressed assignment that breaks down near anticrossings.
+
+        Validity / caveats
+        ------------------
+        - **Low power / linear response.** This is the n̄-photon single-
+          quantum response. Far from a crossing the rungs are nearly
+          harmonic and n̄ = 0 is representative; near a crossing the
+          response is power-dependent (the rungs fan out, n_crit
+          collapses) and you should scan ``n_bar``.
+        - **Near degeneracy.** When two peaks split by less than κ the
+          individual weights are basis-gauge dependent; only the
+          κ-broadened spectrum is invariant. ``crossing_detected`` flags
+          this (the dominant peak no longer carries the weight).
+        - **Truncation.** ``check_convergence`` re-runs at larger
+          (n_qubit, n_photon) and sets ``converged``.
+
+        Parameters
+        ----------
+        offset_charge, parity, charge_cutoff
+            CPB parameters (parity adds 0.5 to n_g for 'odd').
+        coupling_g_hz, readout_freq_hz : float
+            Coupling g and bare resonator frequency ωᵣ [Hz].
+        n_bar : int, optional
+            Photon number of the populated initial state, default 0.
+        n_qubit, n_photon : int, optional
+            Joint-space truncations. Require ``n_photon >= n_bar + 2``.
+        rwa : bool, optional
+            Apply the rotating-wave approximation in the coupling.
+        weight_rtol : float, optional
+            Keep peaks with weight ≥ ``weight_rtol`` × (total response
+            weight). Default 1e-2.
+        single_peak_frac : float, optional
+            If the dominant peak holds less than this fraction of the
+            total weight, the response is split → ``crossing_detected``.
+            Default 0.9.
+        freq_window_hz : float, optional
+            If given, restrict to peaks within ±this of ωᵣ.
+        check_convergence : bool, optional
+            Re-run at (n_qubit+2, n_photon+2) to set ``converged``.
+        conv_tol_hz : float, optional
+            Dominant-peak shift tolerance for convergence, default 100 kHz.
+
+        Returns
+        -------
+        dict with keys:
+            ``peaks_hz``            absorption peak frequencies, weight-sorted
+            ``weights``            normalized weights of those peaks
+            ``dominant_freq_hz``   strongest peak frequency [Hz]
+            ``dominant_chi_hz``    dominant_freq − ωᵣ (observed shift) [Hz]
+            ``dominant_weight_frac`` fraction of total weight in it
+            ``n_significant_peaks``  count of kept peaks
+            ``crossing_detected``  bool, dominant weight < single_peak_frac
+            ``initial_overlap``    |⟨0,n̄|i⟩|² of the initial state
+            ``converged``          bool or None (if not checked)
+        """
+        if n_photon < n_bar + 2:
+            raise ValueError(
+                f"n_photon={n_photon} too small for n_bar={n_bar}; "
+                "need n_photon >= n_bar + 2."
+            )
+
+        def _peaks(nq, nph):
+            freqs, weights, ov = self._resonator_response_peaks(
+                offset_charge, coupling_g_hz, readout_freq_hz, parity,
+                n_bar, nq, nph, rwa, charge_cutoff,
+            )
+            # Absorption sideband only: keep positive-frequency
+            # transitions (drop the ~0 self-term and the −ωᵣ emission
+            # sideband present when n̄ > 0).
+            pos = freqs > 0.5e6
+            fr, wt = freqs[pos], weights[pos]
+            if freq_window_hz is not None:
+                win = np.abs(fr - readout_freq_hz) <= freq_window_hz
+                fr, wt = fr[win], wt[win]
+            return fr, wt, ov
+
+        fr, wt, init_overlap = _peaks(n_qubit, n_photon)
+        if wt.size == 0 or wt.sum() == 0.0:
+            raise RuntimeError(
+                "No positive-frequency resonator response found; relax "
+                "freq_window_hz or increase truncation."
+            )
+        total = wt.sum()
+        keep = wt >= weight_rtol * total
+        fr_s, wt_s = fr[keep], wt[keep]
+        order = np.argsort(-wt_s)
+        fr_s, wt_s = fr_s[order], wt_s[order]
+
+        dom_freq = fr_s[0]
+        dom_frac = wt_s[0] / total
+
+        converged = None
+        if check_convergence:
+            fr2, wt2, _ = _peaks(n_qubit + 2, n_photon + 2)
+            dom2 = fr2[np.argmax(wt2)]
+            converged = bool(abs(dom2 - dom_freq) < conv_tol_hz)
+
+        return {
+            'peaks_hz': fr_s,
+            'weights': wt_s / total,
+            'dominant_freq_hz': float(dom_freq),
+            'dominant_chi_hz': float(dom_freq - readout_freq_hz),
+            'dominant_weight_frac': float(dom_frac),
+            'n_significant_peaks': int(fr_s.size),
+            'crossing_detected': bool(dom_frac < single_peak_frac),
+            'initial_overlap': init_overlap,
+            'converged': converged,
+        }
+
     def compute_quantum_capacitance(self, offset_charges,
                                     c_g_f=None, charge_cutoff=18,
                                     level=0):
@@ -1514,9 +1698,121 @@ class QPD:
         
         # Print summary
         print(f"\nf_10: {freq_10 / 1e9:.3f} GHz")
-        
+
         return fig, ax
-    
+
+    def plot_observed_peak_vs_ng(self, offset_charges=None,
+                                 coupling_g_hz=None,
+                                 readout_freq_hz=7.0e9,
+                                 n_bar=0, num_levels=6,
+                                 n_qubit=8, n_photon=8, rwa=False,
+                                 charge_cutoff=30, compare_chi=True,
+                                 figsize=(4, 3)):
+        """
+        Plot the *observed* parity splitting of the transmission peak vs
+        offset charge — the label-free analogue of
+        :meth:`plot_parity_shift_vs_ng`.
+
+        For each n_g and parity the dominant transmission peak is found
+        from the resonator response of the full hybridized Hamiltonian
+        (:meth:`compute_transmission_spectrum`). The plotted curve is the
+        observable parity splitting ``|f_peak,odd − f_peak,even|`` (equal
+        to ``|χ₀,o − χ₀,e|`` wherever a single peak dominates). Points
+        where the response splits into a doublet (``crossing_detected``)
+        are marked — there the single-number χ₀,ₚ is *not* an observable.
+
+        With ``compare_chi=True`` the label-based |Δχ₀| (the JC dispersive
+        shift read off the dressed-state assignment) is overlaid for
+        comparison: the two agree away from crossings and diverge at them.
+
+        Parameters
+        ----------
+        offset_charges : array_like, optional
+            Offset charges, default linspace(0, 1, 151).
+        coupling_g_hz : float, optional
+            Coupling [Hz]; defaults to ``self.coupling_g_hz``.
+        readout_freq_hz : float, optional
+            Bare resonator frequency ωᵣ [Hz], default 7 GHz.
+        n_bar : int, optional
+            Photon number of the probed initial state, default 0.
+        num_levels, n_qubit, n_photon, rwa, charge_cutoff
+            Passed through to the response / dispersive computations.
+        compare_chi : bool, optional
+            Overlay the label-based JC |Δχ₀|, default True.
+
+        Returns
+        -------
+        fig, ax : matplotlib figure and axes
+        """
+        if offset_charges is None:
+            offset_charges = np.linspace(0, 1, 151)
+        if coupling_g_hz is None:
+            coupling_g_hz = self.coupling_g_hz
+
+        npts = len(offset_charges)
+        obs_split = np.zeros(npts)
+        flagged = np.zeros(npts, dtype=bool)
+        for i, n_g in enumerate(offset_charges):
+            res_o = self.compute_transmission_spectrum(
+                n_g, coupling_g_hz, readout_freq_hz, parity='odd',
+                n_bar=n_bar, n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
+                charge_cutoff=charge_cutoff, check_convergence=False,
+            )
+            res_e = self.compute_transmission_spectrum(
+                n_g, coupling_g_hz, readout_freq_hz, parity='even',
+                n_bar=n_bar, n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
+                charge_cutoff=charge_cutoff, check_convergence=False,
+            )
+            obs_split[i] = abs(
+                res_o['dominant_freq_hz'] - res_e['dominant_freq_hz']
+            )
+            flagged[i] = (res_o['crossing_detected'] or
+                          res_e['crossing_detected'])
+
+        chi_split = None
+        if compare_chi:
+            chi_split = np.abs(self.compute_delta_chi_0(
+                [readout_freq_hz], offset_charges, coupling_g_hz, num_levels,
+                method='jc', n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
+            )[0])
+
+        with plt.style.context(self._style_path):
+            fig, ax = plt.subplots(figsize=figsize)
+
+            if chi_split is not None:
+                ax.semilogy(offset_charges, chi_split / 1e6,
+                            color='gray', ls='--', lw=1.5, alpha=0.8,
+                            label=r'label $|\chi_{0,o}-\chi_{0,e}|$')
+
+            ax.semilogy(offset_charges, obs_split / 1e6,
+                        color='C0', lw=2,
+                        label=r'observed $|f^{o}_{\rm pk}-f^{e}_{\rm pk}|$')
+
+            if flagged.any():
+                ax.scatter(offset_charges[flagged], obs_split[flagged] / 1e6,
+                           s=16, color='red', marker='x', zorder=5,
+                           label='peak split (crossing)')
+
+            ax.set_xlim([0, 1])
+            ax.set_ylim(1e-3)
+            ax.set_xlabel(r'Offset Charge [$C_g V_g / 2e$]')
+            ax.set_ylabel(r'parity splitting [MHz]')
+
+            title_parts = [
+                f'$\\xi={self.ej_ec_ratio:.1f}$',
+                f'$E_J={self.e_j_hz/1e9:.2f}$ GHz',
+                f'$E_C={self.e_c_hz/1e9:.3f}$ GHz',
+                f'$g={coupling_g_hz/1e6:.0f}$ MHz',
+                f'$f_r={readout_freq_hz/1e9:.2f}$ GHz',
+                f'$\\bar n={n_bar}$',
+            ]
+            ax.set_title(', '.join(title_parts), fontsize=7)
+            ax.minorticks_on()
+            ax.legend(loc='best', fontsize=6)
+            ax.grid(alpha=0.3, which='both')
+
+        return fig, ax
+
     def compute_average_chi_0(self, coupling_g_hz, readout_freq_hz,
                              num_points=500, num_levels=6,
                              method='perturbative',
