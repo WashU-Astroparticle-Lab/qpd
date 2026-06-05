@@ -334,3 +334,119 @@ favors neither.
 | $p_m$ | Junction energy participation of mode $m$ |
 | $\varphi_{\rm zpf}, n_{\rm zpf}$ | Zero-point phase / charge fluctuations of the bare transmon |
 | $C_\Sigma, C_c, C_r$ | Qubit self-, coupling, resonator capacitance |
+
+---
+
+## Appendix A. RWA-free (exact) extraction
+
+The Section-2 recipe used the RWA in one place only: the sum rule
+$\sum_m p_m\Omega_m=\omega_q$, which rested on the junction-zpf *conservation*
+$\sum_m\varphi_{J,m}^2=\varphi_{\rm zpf}^2$ (valid for an orthogonal, i.e. RWA,
+bare-to-normal map). The two Vieta relations were already exact. Here we replace
+that one step by its exact counterpart and obtain a fully RWA-free, closed-form
+extraction. (Every formula below was checked against exact Fock-space
+diagonalization and an honest capacitively-coupled circuit, agreeing to machine
+precision from weak coupling through strong coupling.)
+
+### A.1 Setup
+
+Set $\hbar=1$. The exact linearized Hamiltonian in quadratures is
+
+$$
+H=\frac{\omega_r}{2}(x_a^2+p_a^2)+\frac{\omega_q}{2}(x_b^2+p_b^2)+2\tilde g x_a p_b,
+$$
+
+with the junction phase on the bare qubit, $\hat\varphi_J=\varphi_{\rm zpf}(\hat b+\hat b^\dagger)=\sqrt2 \varphi_{\rm zpf} x_b$, so
+
+$$
+\langle\hat\varphi_J^2\rangle=2\varphi_{\rm zpf}^2\langle x_b^2\rangle .
+$$
+
+Two exact facts carry over from Section 2 and from the participation definition:
+
+$$
+\Omega_+^2+\Omega_-^2=\omega_r^2+\omega_q^2,\qquad
+\Omega_+^2\Omega_-^2=\omega_r^2\omega_q^2-4\tilde g^2\omega_r\omega_q\quad\text{(Vieta)},
+$$
+
+$$
+\varphi_{J,m}^2=\frac{p_m\Omega_m}{2E_J},\qquad
+\sum_m\varphi_{J,m}^2=\langle\hat\varphi_J^2\rangle .
+$$
+
+The participation identity $\varphi_{J,m}^2=p_m\Omega_m/2E_J$ is exact per mode — it
+follows from mode equipartition (total inductive energy $=\Omega_m/4$), which holds
+for genuine normal modes and was confirmed numerically against the EPR energy-ratio
+definition, **with no RWA assumed**. The only quantity that was RWA-approximated
+before is the total junction-phase variance $\langle\hat\varphi_J^2\rangle$, which we
+now compute exactly.
+
+### A.2 Exact junction-phase variance
+
+The normal-mode eigenvectors of the equations of motion (mode $\propto e^{-i\Omega_m t}$, normalized later) are, taking $p_b=1$,
+
+$$
+x_a=-\frac{2\tilde g \omega_r}{\omega_r^2-\Omega_m^2},\quad
+p_a=\frac{2i\tilde g \Omega_m}{\omega_r^2-\Omega_m^2},\quad
+x_b=\frac{i\Omega_m}{\omega_q},\quad p_b=1 .
+$$
+
+The symplectic norm $N_m=\mathbf v^\dagger(i \Omega_{\rm sympl})\mathbf v$ is
+
+$$
+N_m=2\Omega_m\!\left[\frac{4\tilde g^2\omega_r}{(\omega_r^2-\Omega_m^2)^2}+\frac{1}{\omega_q}\right],
+$$
+
+so each mode contributes $|x_b|^2/N_m$ to $\langle x_b^2\rangle$. Using the
+determinant identity $(\omega_r^2-\Omega_m^2)(\omega_q^2-\Omega_m^2)=4\tilde g^2\omega_r\omega_q$ and the Vieta sum, the per-mode term collapses to
+
+$$
+\langle x_b^2\rangle=\sum_m\frac{|x_b|^2}{N_m},\qquad
+\frac{|x_b|^2}{N_m}=\frac{\Omega_m(\omega_r^2-\Omega_m^2)}{2\omega_q(\Omega_+^2+\Omega_-^2-2\Omega_m^2)} .
+$$
+
+Summing the two modes gives the closed form
+
+$$
+\boxed{\langle x_b^2\rangle=\frac{\omega_q^2+\Omega_+\Omega_-}{2\omega_q(\Omega_++\Omega_-)}}
+$$
+
+which equals $\tfrac12$ in the decoupled limit, as it must.
+
+### A.3 Exact third equation
+
+Combining $\sum_m p_m\Omega_m=2E_J\langle\hat\varphi_J^2\rangle=2\omega_q\langle x_b^2\rangle$ (using $2E_J\varphi_{\rm zpf}^2=\omega_q$) with the boxed variance:
+
+$$
+\boxed{\sum_m p_m\Omega_m=\frac{\omega_q^2+\Omega_+\Omega_-}{\Omega_++\Omega_-}}
+$$
+
+This is the exact, RWA-free replacement for $\sum_m p_m\Omega_m=\omega_q$. In the
+dispersive limit $\Omega_+\Omega_-\to\omega_q\omega_r$, $\Omega_++\Omega_-\to\omega_q+\omega_r$, the RHS returns $\omega_q$.
+
+### A.4 Closed-form RWA-free extraction
+
+Three exact equations in $(\omega_q,\omega_r,\tilde g)$, solved in sequence:
+
+$$
+\omega_q^2=(\Omega_++\Omega_-)(p_+\Omega_++p_-\Omega_-)-\Omega_+\Omega_-,\qquad E_C=\frac{\omega_q^2}{8E_J},
+$$
+
+$$
+\omega_r^2=\Omega_+^2+\Omega_-^2-\omega_q^2,
+$$
+
+$$
+\tilde g^2=\frac{\omega_r^2\omega_q^2-\Omega_+^2\Omega_-^2}{4 \omega_r\omega_q},\qquad g=\frac{\tilde g}{n_{\rm zpf}} .
+$$
+
+Every input is an observable ($\Omega_\pm$, $p_\pm$); no RWA enters. The recovered
+bare parameters correspond to the charge-basis (diagonal-$C^{-1}$) convention, which
+is the same split the Section-2 formulas converge to in the dispersive limit.
+
+### A.5 What is still approximate
+
+Removing the RWA leaves two approximations that are inherent to the *target model*,
+not to RWA: the **2-mode truncation** (extend by summing over all modes in
+$\langle x_b^2\rangle$ and a many-mode Vieta) and the **linearization of the junction**
+(the cosine's higher orders are the separate, nonlinear story of Section 2).
