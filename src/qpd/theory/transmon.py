@@ -1030,6 +1030,93 @@ class QPD:
             'converged': converged,
         }
 
+    def compute_observed_chi_spectrum(self, offset_charge, coupling_g_hz,
+                                      readout_freq_hz, parity='odd',
+                                      n_qubit=8, n_photon=8, rwa=False,
+                                      charge_cutoff=30, single_peak_frac=0.9):
+        """
+        Label-free, photon-number-resolved observed dispersive shift.
+
+        Diagonalizes the full hybridized Hamiltonian **once** and, for each
+        photon number n, returns the observed shift
+
+            chi_obs(n) = f_peak(n) - omega_r,
+
+        where f_peak(n) is the dominant transmission peak seen from the
+        initial dressed state |0, n> (qubit ground, n photons), weighted by
+        the bare-photon matrix element |<f|a + a^dag|0,n>|^2. This is the
+        matrix-element analogue of :meth:`compute_stark_spectrum`'s
+        ``chi_n[0]`` (which reads the shift off a bare-state *label*): the
+        two agree away from anticrossings and diverge where the label breaks
+        (the response splits into a vacuum-Rabi doublet). It is the
+        photon-resolved, per-call-efficient sibling of
+        :meth:`compute_transmission_spectrum` — one eigensolve yields every
+        photon number instead of one initial state per call.
+
+        Parameters
+        ----------
+        offset_charge, parity, charge_cutoff
+            CPB parameters (parity adds 0.5 to n_g for 'odd').
+        coupling_g_hz, readout_freq_hz : float
+            Coupling g and bare resonator frequency omega_r [Hz].
+        n_qubit, n_photon : int
+            Joint-space truncations (Fock dim = n_photon + 1).
+        rwa : bool
+            Apply the rotating-wave approximation in the coupling.
+        single_peak_frac : float
+            Dominant peak must hold at least this weight fraction, else the
+            point is flagged as a crossing (doublet / ill-defined peak).
+
+        Returns
+        -------
+        chi_obs_hz : ndarray, shape (n_photon,)
+            Observed shift for initial photon numbers n = 0 .. n_photon - 1
+            (the top rung is excluded: a^dag|n_photon> leaves the truncated
+            space). NaN where no |0,n> dressed state could be identified.
+        crossing : ndarray of bool, shape (n_photon,)
+            True where the dominant peak holds < ``single_peak_frac`` of the
+            absorption weight.
+        weight_frac : ndarray, shape (n_photon,)
+            Dominant-peak weight fraction at each n.
+        """
+        evals, evecs, labels, _ = self.solve_jc_eigensystem(
+            offset_charge, coupling_g_hz, readout_freq_hz, parity=parity,
+            n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
+            charge_cutoff=charge_cutoff,
+        )
+        n_fock = n_photon + 1
+        a = np.diag(np.sqrt(np.arange(1, n_fock)), k=1)
+        A = np.kron(np.eye(n_qubit), a + a.T)          # a + a^dag (joint)
+
+        # Lowest-energy dressed state for each bare label (0, n).
+        idx_of = {}
+        for k, (i, n) in enumerate(labels):
+            if i == 0 and n not in idx_of:
+                idx_of[n] = k
+
+        chi_obs = np.full(n_photon, np.nan)
+        crossing = np.zeros(n_photon, dtype=bool)
+        weight_frac = np.full(n_photon, np.nan)
+        for n in range(n_photon):
+            if n not in idx_of:
+                continue
+            i0 = idx_of[n]
+            m = evecs.conj().T @ (A @ evecs[:, i0])    # <f|(a+a^dag)|0,n>
+            w = np.abs(m) ** 2
+            fr = evals - evals[i0]
+            pos = fr > 0.5e6                           # absorption sideband
+            frp, wp = fr[pos], w[pos]
+            total = wp.sum()
+            if total == 0.0:
+                continue
+            dom = int(np.argmax(wp))
+            chi_obs[n] = frp[dom] - readout_freq_hz
+            frac = wp[dom] / total
+            weight_frac[n] = frac
+            crossing[n] = bool(frac < single_peak_frac)
+
+        return chi_obs, crossing, weight_frac
+
     def compute_quantum_capacitance(self, offset_charges,
                                     c_g_f=None, charge_cutoff=18,
                                     level=0):
