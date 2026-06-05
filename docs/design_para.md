@@ -11,9 +11,9 @@ how to interpret the (generally different) numbers they produce.
 We want the parameters of the **bare qubit + bare resonator + coupling** Hamiltonian
 
 $$
-\frac{\hat H}{\hbar} = \sum_i \omega_{q,i}\,|i\rangle\langle i|\otimes \mathbb{1}_r
-\;+\; \omega_r\,\mathbb{1}_q\otimes \hat a^\dagger \hat a
-\;+\; g\,(\hat n - n_g)_q \otimes (\hat a + \hat a^\dagger),
+\frac{\hat H}{\hbar} = \sum_i \omega_{q,i} |i\rangle\langle i|\otimes \mathbb{1}_r
+ + \omega_r \mathbb{1}_q\otimes \hat a^\dagger \hat a
+ + g (\hat n - n_g)_q \otimes (\hat a + \hat a^\dagger),
 $$
 
 where the transmon is a Cooper-pair box (CPB)
@@ -45,14 +45,14 @@ n_{\rm zpf} = \frac{1}{2}\Big(\frac{E_J}{2E_C}\Big)^{1/4},
 $$
 
 with $\hat\varphi_J = \varphi_{\rm zpf}(\hat b + \hat b^\dagger)$ and
-$\hat n = i\, n_{\rm zpf}(\hat b^\dagger - \hat b)$ (charge is the *momentum*
+$\hat n = i n_{\rm zpf}(\hat b^\dagger - \hat b)$ (charge is the *momentum*
 quadrature — this is why capacitive coupling lands on $(\hat b^\dagger - \hat b)$).
-The linearized coupling is $\tilde g\,(\hat b^\dagger-\hat b)(\hat a+\hat a^\dagger)$
-with $\tilde g = g\,n_{\rm zpf}$, and the normal-mode frequencies are
+The linearized coupling is $\tilde g (\hat b^\dagger-\hat b)(\hat a+\hat a^\dagger)$
+with $\tilde g = g n_{\rm zpf}$, and the normal-mode frequencies are
 
 $$
 \Omega_\pm^2 = \frac{\omega_r^2+\omega_q^2}{2}
-\pm \frac{1}{2}\sqrt{(\omega_r^2-\omega_q^2)^2 + 16\,\tilde g^2\,\omega_r\omega_q}
+\pm \frac{1}{2}\sqrt{(\omega_r^2-\omega_q^2)^2 + 16 \tilde g^2 \omega_r\omega_q}
 \qquad\text{(exact),}
 $$
 
@@ -86,9 +86,9 @@ inductive energy $\tfrac{E_J}{2}\hat\varphi_J^2$ and mode inductive zpf energy
 $\tfrac14\hbar\omega_m$,
 
 $$
-p_m = \frac{2 E_J\,\varphi_{J,m}^2}{\hbar\omega_m}
+p_m = \frac{2 E_J \varphi_{J,m}^2}{\hbar\omega_m}
 \quad\Longleftrightarrow\quad
-\varphi_{J,m}^2 = \frac{p_m\,\hbar\omega_m}{2E_J}.
+\varphi_{J,m}^2 = \frac{p_m \hbar\omega_m}{2E_J}.
 $$
 
 **(ii) Conservation of the junction zpf (orthogonal/RWA limit).** Because the
@@ -104,10 +104,10 @@ Combining (i) and (ii) gives a remarkably clean result — **the bare qubit freq
 is the participation-weighted average of the dressed frequencies:**
 
 $$
-\boxed{\ \omega_q = \sum_m p_m\,\Omega_m,
+\boxed{\omega_q = \sum_m p_m \Omega_m,
 \qquad
 E_C = \frac{(\hbar\omega_q)^2}{8 E_J}
-= \frac{\hbar^2\big(\sum_m p_m\Omega_m\big)^2}{8 E_J}\ }
+= \frac{\hbar^2\big(\sum_m p_m\Omega_m\big)^2}{8 E_J}}
 $$
 
 This single equation is what the linear spectrum lacked. The $p_m$ supply the
@@ -134,8 +134,8 @@ fourth checks the 2-mode model: the participation **ratio** must agree with the
 mixing angle implied by $(\omega_q,\omega_r,\tilde g)$,
 
 $$
-\frac{p_{\rm qubit\text{-}like}\,\Omega_{\rm qubit\text{-}like}}
-     {p_{\rm res\text{-}like}\,\Omega_{\rm res\text{-}like}}
+\frac{p_{\rm qubit\text{-}like} \Omega_{\rm qubit\text{-}like}}
+     {p_{\rm res\text{-}like} \Omega_{\rm res\text{-}like}}
 = \cot^2\theta\Big|_{\tan 2\theta = 2\tilde g/(\omega_q-\omega_r)}.
 $$
 
@@ -190,14 +190,14 @@ The capacitive coupling follows from the off-diagonal (coupling) capacitance and
 modes' zero-point voltages (Koch et al. form):
 
 $$
-\hbar g = 2 e\,\beta\,V^0_{\rm rms}\,n_{\rm zpf},
+\hbar g = 2 e \beta V^0_{\rm rms} n_{\rm zpf},
 \qquad
 \beta = \frac{C_c}{C_\Sigma},
 \qquad
 V^0_{\rm rms} = \sqrt{\frac{\hbar\omega_r}{2 C_r}} .
 $$
 
-In matrix language this is $g_{ij}\propto [C^{-1}]_{ij}\,Q_{{\rm zpf},i}Q_{{\rm zpf},j}$ —
+In matrix language this is $g_{ij}\propto [C^{-1}]_{ij} Q_{{\rm zpf},i}Q_{{\rm zpf},j}$ —
 the off-diagonal of the **inverse** capacitance matrix weighted by zero-point charges.
 
 ### Where $\omega_r$ comes from (and why it is *bare*, not dressed)
@@ -315,7 +315,7 @@ capacitance) and approximate reality differently:
 | $E_J, E_C$ | Josephson / charging energy |
 | $\omega_q$ | Bare transmon (plasma) frequency, $\sqrt{8E_CE_J}/\hbar$ |
 | $\omega_r$ | Bare resonator frequency |
-| $g,\ \tilde g$ | Bare coupling; linearized coupling $\tilde g = g\,n_{\rm zpf}$ |
+| $g, \tilde g$ | Bare coupling; linearized coupling $\tilde g = g n_{\rm zpf}$ |
 | $\Omega_\pm$ | Dressed (normal-mode) frequencies from the coupled system |
 | $p_m$ | Junction energy participation of mode $m$ |
 | $\varphi_{\rm zpf}, n_{\rm zpf}$ | Zero-point phase / charge fluctuations of the bare transmon |
