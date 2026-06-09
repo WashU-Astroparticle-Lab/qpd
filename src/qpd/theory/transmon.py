@@ -356,8 +356,8 @@ class QPD:
 
               χᵢ,ₚ = g² Σⱼ≠ᵢ 2 ωᵢⱼ,ₚ |⟨j,p|n̂|i,p⟩|² / (ωᵢⱼ,ₚ² − ωᵣ²)
 
-        - ``method='jc'``: numerical diagonalization of the truncated
-          Jaynes-Cummings-style Hamiltonian
+        - ``method='numeric'``: numerical diagonalization of the truncated
+          circuit-QED (transmon–resonator) Hamiltonian
 
               H = H_CPB(n_g,p) ⊗ 𝟙_r + ℏωᵣ 𝟙_q ⊗ a†a
                   + ℏg n̂_q ⊗ (a + a†)
@@ -367,7 +367,7 @@ class QPD:
           terms. The dispersive shift is read off from the dressed
           spectrum as χᵢ,ₚ = [E(|i,1⟩) − E(|i,0⟩)]/h − ωᵣ where |i,n⟩
           labels the dressed state with maximum overlap on the bare
-          qubit-photon state. The JC path captures higher-order and
+          qubit-photon state. The numerical path captures higher-order and
           counter-rotating corrections beyond Eqn. 3.
 
         Parameters
@@ -385,15 +385,15 @@ class QPD:
         charge_cutoff : int, optional
             Charge basis cutoff (higher for accuracy), default 30
         method : str, optional
-            'perturbative' (default) or 'jc'
+            'perturbative' (default) or 'numeric'
         n_qubit : int, optional
-            (JC only) Number of qubit eigenstates kept in the joint
+            (numeric only) Number of qubit eigenstates kept in the joint
             Hilbert space. Defaults to ``max(num_levels + 2, 8)``.
         n_photon : int, optional
-            (JC only) Maximum photon number kept (Fock dimension is
+            (numeric only) Maximum photon number kept (Fock dimension is
             ``n_photon + 1``), default 5
         rwa : bool, optional
-            (JC only) If True, apply the rotating-wave approximation
+            (numeric only) If True, apply the rotating-wave approximation
             (drop counter-rotating terms). Default False.
 
         Returns
@@ -410,10 +410,10 @@ class QPD:
                 num_levels=num_levels, parity=parity,
                 charge_cutoff=charge_cutoff,
             )
-        elif method == 'jc':
+        elif method == 'numeric':
             if n_qubit is None:
                 n_qubit = max(num_levels + 2, 8)
-            return self._compute_dispersive_matrix_jc(
+            return self._compute_dispersive_matrix_numeric(
                 offset_charge, coupling_g_hz, readout_freq_hz,
                 num_levels=num_levels, parity=parity,
                 charge_cutoff=charge_cutoff,
@@ -421,7 +421,7 @@ class QPD:
             )
         else:
             raise ValueError(
-                f"Unknown method '{method}'. Expected 'perturbative' or 'jc'."
+                f"Unknown method '{method}'. Expected 'perturbative' or 'numeric'."
             )
 
     def _compute_dispersive_matrix_perturbative(
@@ -475,7 +475,7 @@ class QPD:
         return matrix_elements, chi_ip
 
     # ------------------------------------------------------------------
-    # Jaynes-Cummings (numerical diagonalization) path
+    # Circuit-QED (numerical diagonalization) path
     # ------------------------------------------------------------------
 
     def _qubit_block_in_eigenbasis(self, offset_charge, parity='odd',
@@ -514,7 +514,7 @@ class QPD:
         n_qubit_mat = (V.conj().T * charge_states) @ V
         return qubit_freqs_hz, n_qubit_mat
 
-    def build_jc_hamiltonian(self, offset_charge, coupling_g_hz,
+    def build_cqed_hamiltonian(self, offset_charge, coupling_g_hz,
                              readout_freq_hz, parity='odd',
                              n_qubit=8, n_photon=5, rwa=False,
                              charge_cutoff=30, return_components=False):
@@ -647,7 +647,7 @@ class QPD:
             return H, qubit_freqs_hz, n_qubit_mat, basis_labels
         return H
 
-    def solve_jc_eigensystem(self, offset_charge, coupling_g_hz,
+    def solve_cqed_eigensystem(self, offset_charge, coupling_g_hz,
                              readout_freq_hz, parity='odd',
                              n_qubit=8, n_photon=5, rwa=False,
                              charge_cutoff=30):
@@ -676,7 +676,7 @@ class QPD:
             below ~0.5 mean the dressed state is a strong mixture and
             the label is just the nearest bare basis vector.
         """
-        H, qfreqs, nmat, basis_labels = self.build_jc_hamiltonian(
+        H, qfreqs, nmat, basis_labels = self.build_cqed_hamiltonian(
             offset_charge, coupling_g_hz, readout_freq_hz,
             parity=parity, n_qubit=n_qubit, n_photon=n_photon,
             rwa=rwa, charge_cutoff=charge_cutoff,
@@ -700,13 +700,13 @@ class QPD:
 
         return evals, evecs, labels, overlaps
 
-    def _compute_dispersive_matrix_jc(
+    def _compute_dispersive_matrix_numeric(
         self, offset_charge, coupling_g_hz, readout_freq_hz,
         num_levels=6, parity='odd', charge_cutoff=30,
         n_qubit=8, n_photon=5, rwa=False,
     ):
         """
-        Dispersive shift via numerical JC diagonalization. See
+        Dispersive shift via numerical circuit-QED diagonalization. See
         ``compute_dispersive_matrix`` for the public signature.
         """
         if num_levels > n_qubit:
@@ -717,7 +717,7 @@ class QPD:
         if n_photon < 1:
             raise ValueError("n_photon must be >= 1 to read off χ.")
 
-        evals, evecs, labels, _ = self.solve_jc_eigensystem(
+        evals, evecs, labels, _ = self.solve_cqed_eigensystem(
             offset_charge, coupling_g_hz, readout_freq_hz,
             parity=parity, n_qubit=n_qubit, n_photon=n_photon,
             rwa=rwa, charge_cutoff=charge_cutoff,
@@ -759,7 +759,7 @@ class QPD:
                                charge_cutoff=30):
         """
         Compute multi-photon (AC Stark) dispersive structure from the
-        dressed JC spectrum.
+        dressed circuit-QED spectrum.
 
         For each qubit level i and photon number n, the dressed energy
         E(|i,n⟩) is identified by max overlap with the bare state |i⟩⊗|n⟩.
@@ -802,7 +802,7 @@ class QPD:
                 f"num_levels={num_levels} exceeds n_qubit={n_qubit}."
             )
 
-        evals, _, labels, overlaps = self.solve_jc_eigensystem(
+        evals, _, labels, overlaps = self.solve_cqed_eigensystem(
             offset_charge, coupling_g_hz, readout_freq_hz,
             parity=parity, n_qubit=n_qubit, n_photon=n_photon,
             rwa=rwa, charge_cutoff=charge_cutoff,
@@ -877,7 +877,7 @@ class QPD:
         init_overlap : float
             Bare-state overlap of the chosen initial state with |0, n̄⟩.
         """
-        evals, evecs, labels, overlaps = self.solve_jc_eigensystem(
+        evals, evecs, labels, overlaps = self.solve_cqed_eigensystem(
             offset_charge, coupling_g_hz, readout_freq_hz,
             parity=parity, n_qubit=n_qubit, n_photon=n_photon,
             rwa=rwa, charge_cutoff=charge_cutoff,
@@ -914,7 +914,7 @@ class QPD:
         resonator from the full hybridized qubit⊗resonator Hamiltonian.
 
         Unlike the dispersive shift χᵢ,ₚ obtained by *labeling* a dressed
-        state (``method='jc'`` in :meth:`compute_dispersive_matrix`), this
+        state (``method='numeric'`` in :meth:`compute_dispersive_matrix`), this
         is **label-free**: it diagonalizes the full Hamiltonian and reads
         off the resonator response (see :meth:`_resonator_response_peaks`).
         Peaks sit at the dressed transition frequencies E_f − E_i and are
@@ -1079,7 +1079,7 @@ class QPD:
         weight_frac : ndarray, shape (n_photon,)
             Dominant-peak weight fraction at each n.
         """
-        evals, evecs, labels, _ = self.solve_jc_eigensystem(
+        evals, evecs, labels, _ = self.solve_cqed_eigensystem(
             offset_charge, coupling_g_hz, readout_freq_hz, parity=parity,
             n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
             charge_cutoff=charge_cutoff,
@@ -1243,7 +1243,7 @@ class QPD:
                 "poisson_cutoff)."
             )
 
-        evals, evecs, labels, _ = self.solve_jc_eigensystem(
+        evals, evecs, labels, _ = self.solve_cqed_eigensystem(
             offset_charge, coupling_g_hz, readout_freq_hz, parity=parity,
             n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
             charge_cutoff=charge_cutoff,
@@ -1580,9 +1580,9 @@ class QPD:
             Y-axis limits, default [-10, 10] MHz
         method : str, optional
             Dispersive-shift theory to use, 'perturbative' (default) or
-            'jc'. See ``compute_dispersive_matrix``.
+            'numeric'. See ``compute_dispersive_matrix``.
         n_qubit, n_photon, rwa : optional
-            JC-only truncation/options. See ``compute_dispersive_matrix``.
+            numeric-only truncation/options. See ``compute_dispersive_matrix``.
         Returns
         -------
         fig, ax : matplotlib figure and axes
@@ -1656,8 +1656,8 @@ class QPD:
                       label=r'$-g^2/\Delta+g^2/(\Delta-E_C)$')
             
             # Construct comprehensive title
-            method_tag = method if method != 'jc' else (
-                'jc-rwa' if rwa else 'jc'
+            method_tag = method if method != 'numeric' else (
+                'numeric-rwa' if rwa else 'numeric'
             )
             title_parts = [
                 f'$\\xi={self.ej_ec_ratio:.1f}$',
@@ -1963,7 +1963,7 @@ class QPD:
         where the response splits into a doublet (``crossing_detected``)
         are marked — there the single-number χ₀,ₚ is *not* an observable.
 
-        With ``compare_chi=True`` the label-based |Δχ₀| (the JC dispersive
+        With ``compare_chi=True`` the label-based |Δχ₀| (the numerical dispersive
         shift read off the dressed-state assignment) is overlaid for
         comparison: the two agree away from crossings and diverge at them.
 
@@ -1980,7 +1980,7 @@ class QPD:
         num_levels, n_qubit, n_photon, rwa, charge_cutoff
             Passed through to the response / dispersive computations.
         compare_chi : bool, optional
-            Overlay the label-based JC |Δχ₀|, default True.
+            Overlay the label-based numerical |Δχ₀|, default True.
 
         Returns
         -------
@@ -2015,7 +2015,7 @@ class QPD:
         if compare_chi:
             chi_split = np.abs(self.compute_delta_chi_0(
                 [readout_freq_hz], offset_charges, coupling_g_hz, num_levels,
-                method='jc', n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
+                method='numeric', n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
             )[0])
 
         with plt.style.context(self._style_path):
