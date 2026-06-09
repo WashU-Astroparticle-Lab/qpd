@@ -1117,6 +1117,64 @@ class QPD:
 
         return chi_obs, crossing, weight_frac
 
+    def compute_transmission_lineshape(self, offset_charge, coupling_g_hz,
+                                       readout_freq_hz, freqs_hz, parity='odd',
+                                       n_bar=0, kappa_hz=1e5, n_qubit=8,
+                                       n_photon=8, rwa=False, charge_cutoff=30):
+        """
+        Full transmission lineshape S(omega) from the populated state |0,n_bar>.
+
+        Unlike :meth:`compute_transmission_spectrum` (which reduces the response
+        to the dominant peak), this returns the **continuous** spectrum
+
+            S(omega) = sum_f W_f * L_kappa(omega - nu_f),
+
+        with every nonzero-weight final state contributing a Lorentzian of width
+        kappa. Here W_f = |<f|a + a^dag|0,n_bar>|^2, nu_f = E_f - E_i (absorption
+        sideband, nu_f > 0), and
+
+            L_kappa(x) = (kappa/2)^2 / (x^2 + (kappa/2)^2)
+
+        is the peak-normalized Lorentzian (= 1 at x = 0), so an isolated stick
+        contributes a peak of height W_f. This is the honest observable: where
+        two comparable sticks sit within kappa they merge (peak = weighted
+        centroid); where they are separated by more than kappa you see a
+        resolved doublet — no single-number reduction is made.
+
+        Parameters
+        ----------
+        freqs_hz : array_like
+            Frequencies omega [Hz] at which to evaluate S (e.g. a window around
+            readout_freq_hz).
+        kappa_hz : float
+            Resonator linewidth (Lorentzian FWHM) [Hz].
+        offset_charge, coupling_g_hz, readout_freq_hz, parity, n_bar,
+        n_qubit, n_photon, rwa, charge_cutoff
+            As in :meth:`compute_transmission_spectrum`.
+
+        Returns
+        -------
+        S : ndarray, same shape as freqs_hz
+            Transmission lineshape (arbitrary units; sum of weighted
+            Lorentzians).
+        """
+        if n_photon < n_bar + 2:
+            raise ValueError(
+                f"n_photon={n_photon} too small for n_bar={n_bar}; "
+                "need n_photon >= n_bar + 2."
+            )
+        nu_all, w_all, _ = self._resonator_response_peaks(
+            offset_charge, coupling_g_hz, readout_freq_hz, parity, n_bar,
+            n_qubit, n_photon, rwa, charge_cutoff,
+        )
+        pos = nu_all > 0.5e6                       # absorption sideband
+        nu, W = nu_all[pos], w_all[pos]
+        omega = np.asarray(freqs_hz, dtype=float)
+        half = 0.5 * kappa_hz
+        d = omega[:, None] - nu[None, :]
+        S = (W[None, :] * half ** 2 / (d ** 2 + half ** 2)).sum(axis=1)
+        return S
+
     def compute_quantum_capacitance(self, offset_charges,
                                     c_g_f=None, charge_cutoff=18,
                                     level=0):
