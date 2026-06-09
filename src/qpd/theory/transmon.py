@@ -1175,6 +1175,95 @@ class QPD:
         S = (W[None, :] * half ** 2 / (d ** 2 + half ** 2)).sum(axis=1)
         return S
 
+    def compute_transmission_lineshape_driven(
+        self, offset_charge, coupling_g_hz, readout_freq_hz, freqs_hz,
+        n_bar_mean, parity='odd', kappa_hz=1e5, n_qubit=8, n_photon=8,
+        rwa=False, charge_cutoff=30, poisson_cutoff=1e-4):
+        """
+        Poisson-averaged transmission lineshape — an approximation to the
+        spectrum of a *coherently driven* resonator at mean photon number
+        ``n_bar_mean``.
+
+        A coherent readout tone puts the (linear) resonator in a coherent
+        state, whose photon number is Poisson-distributed,
+        P(n; nbar) = exp(-nbar) nbar^n / n!. The measured spectrum is then
+        the Poisson-weighted average of the per-Fock responses:
+
+            S_drive(omega) = sum_n P(n; n_bar_mean) * S_n(omega),
+
+        with S_n the lineshape probed from |0, n> (see
+        :meth:`compute_transmission_lineshape`). A single eigensolve serves
+        the whole sum.
+
+        APPROXIMATION. This is an *incoherent* Poisson-weighted sum over
+        Fock initial states. It captures the photon-number-distribution
+        smearing of a coherent drive but ignores field coherences, the
+        distortion of the state away from coherent by the qubit-induced
+        nonlinearity, and the proper driven dynamics. The rigorous spectrum
+        comes from the driven-dissipative master equation (not implemented).
+
+        Parameters
+        ----------
+        n_bar_mean : float
+            Mean photon number of the coherent state.
+        poisson_cutoff : float
+            Drop photon numbers with P(n; nbar) below this (tail truncation).
+        offset_charge, coupling_g_hz, readout_freq_hz, freqs_hz, parity,
+        kappa_hz, n_qubit, n_photon, rwa, charge_cutoff
+            As in :meth:`compute_transmission_lineshape`.
+
+        Returns
+        -------
+        S : ndarray, same shape as freqs_hz
+            Poisson-averaged lineshape (arbitrary units).
+        """
+        from scipy.stats import poisson
+        ns = np.arange(0, n_photon - 1)
+        pmf = poisson.pmf(ns, n_bar_mean)
+        keep = pmf > poisson_cutoff
+        ns, pmf = ns[keep], pmf[keep]
+        if ns.size == 0:
+            raise ValueError(
+                "Poisson support empty (n_bar_mean outside the kept range or "
+                "poisson_cutoff too high)."
+            )
+        if ns.max() + 2 > n_photon:
+            raise ValueError(
+                f"n_photon={n_photon} too small for n_bar_mean={n_bar_mean}: "
+                f"the Poisson tail reaches n={int(ns.max())}; need "
+                f"n_photon >= {int(ns.max()) + 2} (raise n_photon or "
+                "poisson_cutoff)."
+            )
+
+        evals, evecs, labels, _ = self.solve_jc_eigensystem(
+            offset_charge, coupling_g_hz, readout_freq_hz, parity=parity,
+            n_qubit=n_qubit, n_photon=n_photon, rwa=rwa,
+            charge_cutoff=charge_cutoff,
+        )
+        n_fock = n_photon + 1
+        a = np.diag(np.sqrt(np.arange(1, n_fock)), k=1)
+        A = np.kron(np.eye(n_qubit), a + a.T)
+        idx_of = {}
+        for k, (i, m) in enumerate(labels):
+            if i == 0 and m not in idx_of:
+                idx_of[m] = k
+
+        omega = np.asarray(freqs_hz, dtype=float)
+        half = 0.5 * kappa_hz
+        S = np.zeros_like(omega)
+        for n, p in zip(ns, pmf):
+            i0 = idx_of.get(int(n))
+            if i0 is None:
+                continue
+            mm = evecs.conj().T @ (A @ evecs[:, i0])
+            w = np.abs(mm) ** 2
+            nu = evals - evals[i0]
+            pos = nu > 0.5e6
+            nu_p, w_p = nu[pos], w[pos]
+            d = omega[:, None] - nu_p[None, :]
+            S += p * (w_p[None, :] * half ** 2 / (d ** 2 + half ** 2)).sum(axis=1)
+        return S
+
     def compute_quantum_capacitance(self, offset_charges,
                                     c_g_f=None, charge_cutoff=18,
                                     level=0):
