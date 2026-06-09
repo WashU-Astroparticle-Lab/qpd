@@ -1175,19 +1175,27 @@ class QPD:
         S = (W[None, :] * half ** 2 / (d ** 2 + half ** 2)).sum(axis=1)
         return S
 
-    def compute_transmission_lineshape_driven(
+    def compute_transmission_lineshape_poisson(
         self, offset_charge, coupling_g_hz, readout_freq_hz, freqs_hz,
         n_bar_mean, parity='odd', kappa_hz=1e5, n_qubit=8, n_photon=8,
         rwa=False, charge_cutoff=30, poisson_cutoff=1e-4):
         """
-        Poisson-averaged transmission lineshape — an approximation to the
-        spectrum of a *coherently driven* resonator at mean photon number
-        ``n_bar_mean``.
+        Poisson-averaged transmission lineshape.
 
-        A coherent readout tone puts the (linear) resonator in a coherent
-        state, whose photon number is Poisson-distributed,
-        P(n; nbar) = exp(-nbar) nbar^n / n!. The measured spectrum is then
-        the Poisson-weighted average of the per-Fock responses:
+        **This is an approximation, NOT a solution of the driven
+        Hamiltonian.** It does not drive or dissipate anything: it simply
+        weights the undriven per-Fock responses ``S_n`` by the Poisson
+        distribution a coherent state *would* have at mean photon number
+        ``n_bar_mean``. It captures only the photon-number-distribution
+        smearing; the actual driven-dissipative spectrum (bistability,
+        punch-out, pointer states) requires a master-equation solve — see
+        the "Notes" below and the project issue tracker.
+
+        A coherent readout tone would put the (linear) resonator in a
+        coherent state, whose photon number is Poisson-distributed,
+        P(n; nbar) = exp(-nbar) nbar^n / n!. This method approximates the
+        measured spectrum as the Poisson-weighted average of the *undriven*
+        per-Fock responses:
 
             S_drive(omega) = sum_n P(n; n_bar_mean) * S_n(omega),
 
