@@ -8,18 +8,27 @@ version = "0.1.0"
 description = "QPD Transmon qubit simulation library"
 requires-python = ">=3.9"
 dependencies = [
-    "numpy>=1.22",
-    "scipy>=1.8",
+    "numpy>=1.23.2",
+    "scipy>=1.9.2",
     "matplotlib>=3.3",
     "pyyaml>=5.4",
     "iminuit>=2.20",
+    # Open-system driven-dissipative solver backend. QuTiP 5 supplies
+    # Qobj/tensor/destroy/qeye/steadystate/expect/liouvillian imported at the top
+    # of src/qpd/theory/driven.py, so it is a hard import for that module (and for
+    # the notebooks/examples that use it) -- declared core, not optional. QuTiP 5
+    # requires numpy>=1.23.2, scipy>=1.9.2 (the floors above are bumped to match).
+    "qutip>=5.0",
 ]
 
 [project.optional-dependencies]
-# Open-system driven-dissipative solver backend (QuTiP). QuTiP 5 supplies
-# Qobj/tensor/destroy/qeye/steadystate/expect/liouvillian for src/qpd/theory/driven.py.
-# QuTiP 5 requires numpy>=1.22, scipy>=1.8 (the base floors are bumped to match). 5.3+ preferred.
+# Back-compat alias -- qutip is now a core dependency (kept so `pip install .[open]`
+# still resolves for existing scripts).
 open = ["qutip>=5.0"]
+# Resonator circle-fit (Probst notch) used by notebooks/simulation.ipynb section 9
+# and the daq readout chain. Not on PyPI -- install from source:
+#   pip install "resonator_tools @ git+https://github.com/sebastianprobst/resonator_tools.git"
+fit = ["resonator_tools @ git+https://github.com/sebastianprobst/resonator_tools.git"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

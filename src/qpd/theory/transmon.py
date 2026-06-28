@@ -1175,6 +1175,110 @@ class QPD:
         S = (W[None, :] * half ** 2 / (d ** 2 + half ** 2)).sum(axis=1)
         return S
 
+    def compute_s21_dressed(self, offset_charge, coupling_g_hz, readout_freq_hz,
+                            freqs_hz, parity='odd', n_bar=0, kappa_hz=1e5,
+                            kappa_c_hz=None, phi=0.0, env_a=1.0, env_alpha=0.0,
+                            env_tau=0.0, n_qubit=8, n_photon=8, rwa=False,
+                            charge_cutoff=30):
+        r"""Complex S21(f) forward model in the Probst notch convention.
+
+        Stationary, full-Hamiltonian forward model for the *measured* complex
+        transmission. Unlike :meth:`compute_transmission_lineshape` (which
+        returns only the real Lorentzian magnitude) this returns the **complex**
+        S21 in the **Probst Eq. (1)** notch convention [Probst et al., Rev. Sci.
+        Instrum. 86, 024706 (2015)], so a simulated curve overlays directly on a
+        ``resonator_tools`` circle fit of measured (VNA / lock-in) data.
+
+        The readout feedline couples to the bare resonator field, so the single
+        resonator pole is split by the qubit into dressed sub-peaks at the
+        transition frequencies ``nu_f = E_f - E_i`` of the full hybridized
+        Hamiltonian (diagonalized in :meth:`_resonator_response_peaks`), with
+        fractional weights ``W_f = |<f|(a+a_dag)|i>|^2`` from the **stationary**
+        populated state ``|i> = |0, n_bar>`` (default ``n_bar=0`` ground). Each
+        sub-peak is emitted as a Probst notch term:
+
+        .. math::
+
+            S_{21}(f) = a\,e^{i\alpha}\,e^{-2\pi i f\tau}
+              \left[\, 1 - \frac{Q_l}{|Q_c|}\,e^{i\phi}
+              \sum_f \frac{W_f}{1 + 2 i Q_l\,(f/\nu_f - 1)} \,\right],
+
+        with :math:`Q_l = f_r/\kappa` (loaded) and :math:`Q_c = f_r/\kappa_c`
+        (coupling). The weights are normalized ``W_f -> W_f / sum_f W_f``; by the
+        sum rule ``sum_f |<f|a_dag|i>|^2 = <i| a a_dag |i> = n_bar + 1`` the
+        dressed states only *redistribute* the bare cavity response across the
+        ``nu_f``, so the single-pole limit (``coupling_g_hz -> 0``, one peak at
+        ``nu_f = f_r``, ``W = 1``) recovers Probst Eq. (1) exactly: a notch of
+        diameter ``Q_l/|Q_c|`` reaching ``1 - Q_l/Q_c`` on resonance (= 0 when
+        ``kappa_c = kappa``) and tending to 1 for ``f -> +-inf``.
+
+        .. note::
+           This convention is **not** the repo's Gardiner-Collett
+           :func:`qpd.theory.driven.s21` (diameter ``2*kappa_c/kappa``, notch ->
+           -1). The two differ by a factor of 2 in depth, the sign of ``i`` (the
+           Probst Fourier convention is ``+2i Q_l (f/f_r - 1)``), and the
+           environment terms ``a, alpha, tau, phi``. The *peak position* (the
+           physics: dressed chi) is convention-independent.
+
+        Parameters
+        ----------
+        offset_charge, parity, charge_cutoff
+            CPB parameters (parity adds 0.5 to n_g for 'odd').
+        coupling_g_hz, readout_freq_hz : float
+            Coupling g and bare resonator frequency f_r [Hz].
+        freqs_hz : array_like
+            Probe frequencies f [Hz] (a window around readout_freq_hz). A uniform
+            grid is required if the result will be fed to
+            :func:`qpd.theory.driven.apply_lockin_window`.
+        n_bar : int, optional
+            Photon number of the stationary populated state, default 0.
+        kappa_hz : float, optional
+            Total resonator linewidth kappa (FWHM) [Hz]; sets Q_l = f_r/kappa.
+        kappa_c_hz : float, optional
+            Coupling-port rate kappa_c [Hz]; sets Q_c = f_r/kappa_c. Defaults to
+            ``kappa_hz`` (Phase-1 convention kappa_c = kappa).
+        phi : float, optional
+            Impedance-mismatch angle (rotates the resonance circle), default 0.
+        env_a, env_alpha, env_tau : float, optional
+            Measurement-chain environment: amplitude ``a``, phase offset
+            ``alpha`` [rad], and cable delay ``tau`` [s] (Probst ``a e^{i alpha}
+            e^{-2 pi i f tau}``). Defaults give the ideal resonator (1, 0, 0).
+        n_qubit, n_photon, rwa
+            Joint-space truncations / RWA toggle. Require ``n_photon >= n_bar+2``.
+
+        Returns
+        -------
+        S21 : ndarray of complex, same shape as freqs_hz
+            Complex transmission in the Probst notch convention.
+        """
+        if n_photon < n_bar + 2:
+            raise ValueError(
+                f"n_photon={n_photon} too small for n_bar={n_bar}; "
+                "need n_photon >= n_bar + 2."
+            )
+        if kappa_c_hz is None:
+            kappa_c_hz = kappa_hz
+        nu_all, w_all, _ = self._resonator_response_peaks(
+            offset_charge, coupling_g_hz, readout_freq_hz, parity, n_bar,
+            n_qubit, n_photon, rwa, charge_cutoff,
+        )
+        pos = nu_all > 0.5e6                        # absorption sideband
+        nu, w = nu_all[pos], w_all[pos]
+        if w.sum() <= 0.0:
+            raise RuntimeError(
+                "no positive-frequency resonator response weight; check "
+                "n_qubit/n_photon or that |0,n_bar> is not on a strong crossing."
+            )
+        W = w / w.sum()                            # fractional weights (sum rule)
+        q_l = readout_freq_hz / kappa_hz
+        q_c = readout_freq_hz / kappa_c_hz
+        omega = np.asarray(freqs_hz, dtype=float)
+        denom = 1.0 + 2j * q_l * (omega[:, None] / nu[None, :] - 1.0)
+        resonator = (W[None, :] / denom).sum(axis=1)
+        ideal = 1.0 - (q_l / abs(q_c)) * np.exp(1j * phi) * resonator
+        env = env_a * np.exp(1j * env_alpha) * np.exp(-2j * np.pi * omega * env_tau)
+        return env * ideal
+
     def compute_transmission_lineshape_poisson(
         self, offset_charge, coupling_g_hz, readout_freq_hz, freqs_hz,
         n_bar_mean, parity='odd', kappa_hz=1e5, n_qubit=8, n_photon=8,

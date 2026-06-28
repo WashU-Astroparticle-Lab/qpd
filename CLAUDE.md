@@ -12,7 +12,7 @@ QPD is a Python simulation library for **QPD Transmon** qubits, developed by the
 pip install -e .
 ```
 
-This installs the `qpd` package in editable mode. Dependencies (numpy, scipy, matplotlib, pyyaml) are declared in `pyproject.toml`.
+This installs the `qpd` package in editable mode. Core dependencies (numpy, scipy, matplotlib, pyyaml, iminuit, qutip) are declared in `pyproject.toml`. `qutip` is required by the driven-dissipative solver `qpd.theory.driven` (imported at module load), so it is a core dependency, not optional. The `resonator_tools` circle-fit (Probst notch) used by `notebooks/simulation.ipynb` §9 and the `daq` readout chain is not on PyPI; install it via `pip install ".[fit]"` (git source) or `pip install -e /path/to/resonator_tools`.
 
 ## Usage
 
