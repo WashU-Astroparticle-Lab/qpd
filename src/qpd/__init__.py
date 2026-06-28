@@ -17,6 +17,10 @@ from qpd.simulator import (
     ChargeJumpEvents,
     CompositeNg,
     generate_parity_trajectory,
+    parity_from_flip_times,
+    QuasiparticleBurstModel,
+    BurstTruth,
+    poisson_burst_times,
 )
 
 __all__ = [
@@ -36,4 +40,8 @@ __all__ = [
     "ChargeJumpEvents",
     "CompositeNg",
     "generate_parity_trajectory",
+    "parity_from_flip_times",
+    "QuasiparticleBurstModel",
+    "BurstTruth",
+    "poisson_burst_times",
 ]
