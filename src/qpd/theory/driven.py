@@ -63,6 +63,8 @@ __all__ = [
     "collapse",
     "cavity_only_liouvillian",
     "s21",
+    "apply_lockin_window",
+    "measured_s21_dressed",
     "wrap_cqed_hamiltonian",
     "cavity_operator",
     "dressed_jump_operators",
@@ -233,6 +235,133 @@ def s21(a_expect: complex, eps_hz: float, kappa_c_hz: float) -> complex:
     """
     alpha_in = eps_hz / np.sqrt(kappa_c_hz)
     return 1.0 - 1j * np.sqrt(kappa_c_hz) * a_expect / alpha_in
+
+
+def apply_lockin_window(freqs_hz, s21, df_hz, n_lobes: int = 20):
+    r"""Apply the lock-in bandwidth (sinc) window to a complex S21 spectrum.
+
+    The readout lock-in (presto, ``daq/measurements/sweep.py``) demodulates at
+    each probe frequency by integrating the down-converted I/Q signal over a
+    boxcar of duration ``T = 1/df`` (``set_df(df)``), with the inverse-sinc
+    compensation disabled (``set_inv_sinc(..., 0)``). A boxcar of width ``T`` in
+    time has Fourier transform ``sinc(pi f T)``, so the *measured* complex
+    spectrum is the true spectrum **convolved** with that window:
+
+    .. math::
+
+        S_{21}^{\rm meas}(f) = \big(S_{21}^{\rm true} * K\big)(f),
+        \qquad K(f) = \mathrm{sinc}(\pi f / df),
+
+    whose first null is at ``df`` (``numpy.sinc(x) = sin(pi x)/(pi x)``). The
+    convolution is on the **complex** S21 (the lock-in records I+jQ at zero IF).
+    The sinc has real *negative* side-lobes -- this is physical (a true boxcar
+    transform, not Gaussian smoothing) and is preserved.
+
+    A single symmetric (zero-phase) sinc is used. The causal-rect alternative
+    only adds a constant group delay ``T/2`` (a linear phase ramp) that shifts
+    neither ``|S21|`` nor the peak position, so it is omitted.
+
+    Parameters
+    ----------
+    freqs_hz : array_like
+        Monotonic, **uniformly spaced** probe-frequency grid [Hz]. Place the
+        resonance with at least ``~n_lobes * df`` margin from both grid edges so
+        the kernel's side-lobes are not truncated against the boundary.
+    s21 : array_like of complex
+        True S21 on ``freqs_hz`` (e.g. from
+        :meth:`qpd.theory.transmon.QPD.compute_s21_dressed`).
+    df_hz : float
+        Lock-in frequency resolution / pixel rate [Hz]; integration time
+        ``T = 1/df_hz`` sets the sinc first null at ``df_hz``.
+    n_lobes : int, optional
+        Number of sinc lobes (each of width ``df_hz``) kept on each side of the
+        kernel before normalization. Default 20; larger captures more of the
+        slowly decaying tails.
+
+    Returns
+    -------
+    s21_meas : ndarray of complex, same shape as ``s21``
+        Bandwidth-windowed S21.
+    """
+    freqs = np.asarray(freqs_hz, dtype=float)
+    vals = np.asarray(s21, dtype=complex)
+    if freqs.ndim != 1 or freqs.size != vals.size:
+        raise ValueError("freqs_hz and s21 must be 1-D arrays of equal length")
+    if freqs.size < 2:
+        raise ValueError("need at least 2 grid points")
+    if df_hz <= 0.0:
+        raise ValueError("df_hz must be > 0")
+    dgrid = np.diff(freqs)
+    step = float(dgrid.mean())
+    if not np.allclose(dgrid, step, rtol=1e-6, atol=0.0):
+        raise ValueError("apply_lockin_window requires a uniform frequency grid")
+    half = int(np.ceil(n_lobes * df_hz / abs(step)))
+    if half < 1:
+        # Window much narrower than one grid step -> kernel is a delta; no-op.
+        return vals.copy()
+    if freqs.size < 2 * half + 1:
+        span = (freqs.size - 1) * abs(step)
+        raise ValueError(
+            f"grid too short for the window: span {span:.3g} Hz < "
+            f"~2*n_lobes*df = {2 * n_lobes * df_hz:.3g} Hz; widen freqs_hz, "
+            "raise df_hz, or lower n_lobes."
+        )
+    m = np.arange(-half, half + 1)
+    kernel = np.sinc(m * step / df_hz)          # first null at df_hz
+    kernel = kernel / kernel.sum()              # unit DC gain (flat S21 stays flat)
+    # Edge-replicate padding: off-resonance S21 -> its (flat) baseline, so the
+    # spectrum is assumed constant beyond the window edges. 'valid' restores length.
+    padded = np.pad(vals, half, mode="edge")
+    return np.convolve(padded, kernel, mode="valid")
+
+
+def measured_s21_dressed(
+    qpd,
+    offset_charge,
+    coupling_g_hz,
+    readout_freq_hz,
+    freqs_hz,
+    df_hz,
+    *,
+    n_lobes: int = 20,
+    **kwargs,
+):
+    """Stationary dressed S21 forward model + lock-in bandwidth window.
+
+    Convenience wrapper: builds the true S21 with
+    :meth:`qpd.theory.transmon.QPD.compute_s21_dressed` (Probst notch
+    convention) and applies :func:`apply_lockin_window` for the finite-bandwidth
+    measured spectrum.
+
+    Parameters
+    ----------
+    qpd : qpd.theory.transmon.QPD
+        Transmon instance.
+    offset_charge, coupling_g_hz, readout_freq_hz, freqs_hz
+        Passed to :meth:`compute_s21_dressed`.
+    df_hz : float
+        Lock-in resolution [Hz] (window first null).
+    n_lobes : int, optional
+        Sinc-kernel half-width in lobes, default 20.
+    **kwargs
+        Forwarded to :meth:`compute_s21_dressed` (``parity``, ``n_bar``,
+        ``kappa_hz``, ``kappa_c_hz``, ``phi``, ``env_a``, ``env_alpha``,
+        ``env_tau``, ``n_qubit``, ``n_photon``, ``rwa``, ``charge_cutoff``).
+
+    Returns
+    -------
+    dict with keys ``freqs_hz``, ``s21_true``, ``s21_meas``, ``df_hz``.
+    """
+    s21_true = qpd.compute_s21_dressed(
+        offset_charge, coupling_g_hz, readout_freq_hz, freqs_hz, **kwargs
+    )
+    s21_meas = apply_lockin_window(freqs_hz, s21_true, df_hz, n_lobes=n_lobes)
+    return {
+        "freqs_hz": np.asarray(freqs_hz, dtype=float),
+        "s21_true": s21_true,
+        "s21_meas": s21_meas,
+        "df_hz": float(df_hz),
+    }
 
 
 # ===========================================================================

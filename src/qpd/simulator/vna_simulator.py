@@ -44,6 +44,13 @@ class VNASimulator:
     bare resonance frequency, the S21 model is evaluated at the fixed
     drive frequency, and additive noise is applied. χ(n_g) is precomputed
     on a fine grid and interpolated to keep long traces fast.
+
+    The readout LO ``f_drive`` is independent of the resonator frequency
+    ``resonator.f_r``: ``f_r`` sets ωᵣ in the cQED Hamiltonian (and the
+    notch centre, shifted by χ), while ``f_drive`` is only the fixed probe
+    point at which the complex S21 (the I/Q sample) is read. Park the LO
+    anywhere — e.g. a kHz off the resonator line — by setting
+    ``f_drive != resonator.f_r``.
     """
 
     qpd: QPD
@@ -71,11 +78,15 @@ class VNASimulator:
         chi_even = np.empty_like(grid)
         chi_odd = np.empty_like(grid)
         g = self.qpd.coupling_g_hz
+        # chi sets omega_r in the cQED Hamiltonian -> use the RESONATOR frequency
+        # (self.resonator.f_r), NOT the readout LO (self.f_drive). The two are
+        # independent: f_drive is only the fixed probe point sampled in notch_s21.
+        f_r = self.resonator.f_r
         for k, n_g in enumerate(grid):
             _, chi_e = self.qpd.compute_dispersive_matrix(
                 float(n_g),
                 coupling_g_hz=g,
-                readout_freq_hz=self.f_drive,
+                readout_freq_hz=f_r,
                 num_levels=2,
                 parity="even",
                 charge_cutoff=self.charge_cutoff,
@@ -83,7 +94,7 @@ class VNASimulator:
             _, chi_o = self.qpd.compute_dispersive_matrix(
                 float(n_g),
                 coupling_g_hz=g,
-                readout_freq_hz=self.f_drive,
+                readout_freq_hz=f_r,
                 num_levels=2,
                 parity="odd",
                 charge_cutoff=self.charge_cutoff,
