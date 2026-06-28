@@ -49,7 +49,8 @@ def generate_parity_trajectory(
     rng: np.random.Generator,
     initial: Literal["steady_state", "even", "odd"] = "steady_state",
     extra_flip_times: np.ndarray | None = None,
-) -> np.ndarray:
+    return_flip_times: bool = False,
+):
     """Sample a two-state CTMC on a uniform time grid.
 
     Switching events are drawn from exponential waiting times with rate
@@ -68,10 +69,20 @@ def generate_parity_trajectory(
 
     Returns an int8 array of the same length as `t_grid` containing 0
     (even) or 1 (odd).
+
+    If `return_flip_times` is True, returns ``(parity, flip_times)`` where
+    ``flip_times`` is the sorted float array of every parity-toggle time that
+    falls inside the grid window — the merged set of background CTMC switches
+    and burst (``extra_flip_times``) events. This is the exact, sub-sample
+    ground truth for parity-flip timing (the grid-quantised transitions in the
+    returned array would lose flips separated by less than one sample).
     """
     t_grid = np.asarray(t_grid, dtype=float)
     if t_grid.size == 0:
-        return np.empty(0, dtype=np.int8)
+        empty = np.empty(0, dtype=np.int8)
+        if return_flip_times:
+            return empty, np.empty(0, dtype=float)
+        return empty
 
     if gamma_e_to_o < 0 or gamma_o_to_e < 0:
         raise ValueError("rates must be non-negative")
@@ -140,5 +151,8 @@ def generate_parity_trajectory(
         switch_times.append(t_bg)
         t = t_bg
 
-    flips = np.asarray(switch_times, dtype=float)
-    return parity_from_flip_times(t_grid, flips, int(initial_state))
+    flips = np.sort(np.asarray(switch_times, dtype=float))
+    parity = parity_from_flip_times(t_grid, flips, int(initial_state))
+    if return_flip_times:
+        return parity, flips
+    return parity

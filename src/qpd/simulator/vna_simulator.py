@@ -23,6 +23,9 @@ class SimResult:
     parity: np.ndarray
     n_g: np.ndarray
     bursts: list[BurstTruth] = field(default_factory=list)
+    flip_times: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=float)
+    )
 
     @property
     def iq(self) -> np.ndarray:
@@ -121,12 +124,13 @@ class VNASimulator:
         else:
             burst_event_times, bursts = None, []
 
-        parity_t = generate_parity_trajectory(
+        parity_t, flip_times = generate_parity_trajectory(
             t,
             self.gamma_even_to_odd,
             self.gamma_odd_to_even,
             rng,
             extra_flip_times=burst_event_times,
+            return_flip_times=True,
         )
 
         n_g_grid, chi_even, chi_odd = self._chi_grid(
@@ -147,4 +151,5 @@ class VNASimulator:
             parity=parity_t,
             n_g=n_g_t,
             bursts=bursts,
+            flip_times=flip_times,
         )
