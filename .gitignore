@@ -208,3 +208,7 @@ __marimo__/
 
 # macOS
 .DS_Store
+
+# Generated MLE-bench datasets (large; regenerate with scripts/generate_mle_dataset.py)
+data/mle_bench/
+data/

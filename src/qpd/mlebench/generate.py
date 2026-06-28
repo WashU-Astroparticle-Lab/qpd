@@ -437,6 +437,7 @@ def generate_all(
     train_fraction: float = 0.6,
     master_seed: int = 0,
     sec_per_chunk: float = 1.0,
+    bytes_per_chunk: float | None = None,
     progress: bool = True,
 ) -> dict:
     """Generate BOTH datasets (signal + background) at equal chunk count."""
@@ -447,6 +448,7 @@ def generate_all(
         sample_rate_hz=physics.sample_rate_hz,
         n_datasets=2,
         sec_per_chunk=sec_per_chunk,
+        bytes_per_chunk=bytes_per_chunk,
     )
     n = plan["chunks_per_dataset"]
     if progress:

@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0, help="master seed")
     p.add_argument("--sec-per-chunk", type=float, default=1.0,
                    help="compute-cost estimate used for budget planning")
+    p.add_argument("--bytes-per-chunk", type=float, default=None,
+                   help="override the per-chunk byte estimate used for budget "
+                        "planning (e.g. 14e6 for the measured ~13 MB Parquet "
+                        "size; default assumes uncompressed ~24.5 MB)")
     p.add_argument("--dry-run", action="store_true",
                    help="print the generation plan and exit")
     p.add_argument("--smoke", action="store_true",
@@ -80,6 +84,7 @@ def main(argv=None) -> int:
         sample_rate_hz=DEFAULT_PHYSICS.sample_rate_hz,
         n_datasets=2,
         sec_per_chunk=args.sec_per_chunk,
+        bytes_per_chunk=args.bytes_per_chunk,
     )
     print("Generation plan:")
     print(json.dumps(plan, indent=2))
@@ -95,6 +100,7 @@ def main(argv=None) -> int:
         train_fraction=args.train_fraction,
         master_seed=args.seed,
         sec_per_chunk=args.sec_per_chunk,
+        bytes_per_chunk=args.bytes_per_chunk,
     )
     print("\nDone. Summary:")
     print(json.dumps(result, indent=2, default=str))
