@@ -8,7 +8,15 @@ from qpd.simulator.offset_charge import (
     OffsetChargeModel,
     SawtoothNg,
 )
-from qpd.simulator.parity import generate_parity_trajectory
+from qpd.simulator.parity import (
+    generate_parity_trajectory,
+    parity_from_flip_times,
+)
+from qpd.simulator.quasiparticle_bursts import (
+    BurstTruth,
+    QuasiparticleBurstModel,
+    poisson_burst_times,
+)
 from qpd.simulator.resonator import ResonatorConfig, notch_s21
 from qpd.simulator.vna_simulator import SimResult, VNASimulator
 
@@ -25,4 +33,8 @@ __all__ = [
     "ChargeJumpEvents",
     "CompositeNg",
     "generate_parity_trajectory",
+    "parity_from_flip_times",
+    "QuasiparticleBurstModel",
+    "BurstTruth",
+    "poisson_burst_times",
 ]

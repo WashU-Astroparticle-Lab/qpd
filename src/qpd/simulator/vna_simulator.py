@@ -11,6 +11,7 @@ from qpd.theory.transmon import QPD
 from .noise import NoiseModel, WhiteGaussianNoise
 from .offset_charge import ConstantNg, OffsetChargeModel
 from .parity import EVEN, generate_parity_trajectory
+from .quasiparticle_bursts import BurstTruth, QuasiparticleBurstModel
 from .resonator import ResonatorConfig, notch_s21
 
 
@@ -21,6 +22,7 @@ class SimResult:
     q: np.ndarray
     parity: np.ndarray
     n_g: np.ndarray
+    bursts: list[BurstTruth] = field(default_factory=list)
 
     @property
     def iq(self) -> np.ndarray:
@@ -61,6 +63,7 @@ class VNASimulator:
     gamma_odd_to_even: float
     noise: NoiseModel = field(default_factory=_default_noise)
     offset_charge: OffsetChargeModel = field(default_factory=_default_ng)
+    quasiparticle_bursts: QuasiparticleBurstModel | None = None
     n_g_grid_points: int = 401
     charge_cutoff: int = 30
 
@@ -113,11 +116,17 @@ class VNASimulator:
 
         n_g_t = self.offset_charge.evaluate(t)
 
+        if self.quasiparticle_bursts is not None:
+            burst_event_times, bursts = self.quasiparticle_bursts.sample(rng)
+        else:
+            burst_event_times, bursts = None, []
+
         parity_t = generate_parity_trajectory(
             t,
             self.gamma_even_to_odd,
             self.gamma_odd_to_even,
             rng,
+            extra_flip_times=burst_event_times,
         )
 
         n_g_grid, chi_even, chi_odd = self._chi_grid(
@@ -137,4 +146,5 @@ class VNASimulator:
             q=s21.imag,
             parity=parity_t,
             n_g=n_g_t,
+            bursts=bursts,
         )
