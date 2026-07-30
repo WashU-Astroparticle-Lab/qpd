@@ -738,6 +738,8 @@ plot_trace_with_flips(result.iq, 1e5, rec.flip_times,
                       window=(0.0, 0.6), smooth_hz=300.0)
 ```
 
+![Raw I/Q with reconstructed tunnelling times](figures/trace_with_flips.png)
+
 Green solid = truth, red dashed = reconstructed, so agreement (and
 disagreement) is visible at a glance. `confidence=rec.confidence` scales each
 detected line's opacity, making low-confidence flips look tentative.
