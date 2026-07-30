@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from qpd import (QPD, ChargeJumpEvents, QuasiparticleBurstModel,
+from qpd import (QPD, ChargeJumpEvents, ConstantNg, QuasiparticleBurstModel,
                  ResonatorConfig, SawtoothNg, VNASimulator,
                  WhiteGaussianNoise)
 
@@ -130,3 +130,58 @@ def build_scenario(
     return Scenario(sim=sim, duration=duration, fold_period=0.5 / slope,
                     ramp_period=1.0 / ramp_hz, half_pairs_per_ramp=SPAN / 0.5,
                     jump_times=jump_t, jump_deltas=jump_d, label=label)
+
+
+def build_static_scenario(
+    n_g: float = 0.0,
+    tunnel_rate_hz: float = 10.0,
+    duration: float = 5.0,
+    sigma: float = 2e-4,
+    e_j_hz: float = 8.335e9,
+    e_c_hz: float = 0.695e9,
+    g_hz: float = 150e6,
+    burst_rate_hz: float = 0.0,
+    burst_n_qp: float | np.ndarray = 15.0,
+    sample_rate: float = SAMPLE_RATE,
+    seed: int = 0,
+    label: str = "",
+) -> Scenario:
+    """Constant-offset-charge scenario: two stationary blobs, telegraph hopping.
+
+    This is the regime :func:`qpd.reconstruction.reconstruct_parity_flips_static`
+    targets. There is no ramp, so no fold period, no reset comb and no
+    parity-blind point sweeping past -- but the contrast is fixed by ``n_g``.
+    Best contrast is at ``n_g = 0`` (mod 0.5); ``n_g = 0.25`` (mod 0.5) is the
+    parity-blind charge, where the two branches coincide and no algorithm can
+    recover the flips.
+    """
+    qpd = QPD(e_j_hz=e_j_hz, e_c_hz=e_c_hz)
+    qpd.coupling_g_hz = g_hz
+    f_bare = FR
+    for _ in range(6):
+        _, chi = qpd.compute_dispersive_matrix(0.0, g_hz, f_bare,
+                                               num_levels=2, parity="even")
+        f_bare = FR - chi[0] + BARE_SOLVE_OFFSET
+    resonator = ResonatorConfig(f_r=f_bare, q_i=QI, q_c_abs=QC,
+                                phi=0.03, a=0.5, alpha=0.4, tau=50e-9)
+
+    rng = np.random.default_rng(seed + 991)
+    bursts = None
+    if burst_rate_hz > 0:
+        onsets = np.sort(rng.uniform(0.0, duration,
+                                     rng.poisson(burst_rate_hz * duration)))
+        if onsets.size:
+            bursts = QuasiparticleBurstModel(times=onsets, tau=3.7e-3,
+                                             mu=1.2e-3, sigma=0.4e-3,
+                                             expected_n_qp=burst_n_qp)
+
+    sim = VNASimulator(
+        qpd=qpd, resonator=resonator, f_drive=FR + 1e3,
+        sample_rate=sample_rate,
+        gamma_even_to_odd=tunnel_rate_hz, gamma_odd_to_even=tunnel_rate_hz,
+        noise=WhiteGaussianNoise(sigma=sigma),
+        offset_charge=ConstantNg(n_g), quasiparticle_bursts=bursts,
+    )
+    return Scenario(sim=sim, duration=duration, fold_period=float("nan"),
+                    ramp_period=float("nan"), half_pairs_per_ramp=float("nan"),
+                    label=label or f"static n_g={n_g}")

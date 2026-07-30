@@ -8,11 +8,11 @@ import numpy as np
 
 from .emission import EmissionModel, learn_emission_model, refine_fold_period
 from .events import extract_flips
-from .hmm import HMMResult, forward_backward, gaussian_log_emissions, viterbi
+from .hmm import decode_with_rate
 from .ramp import ResetComb, find_reset_comb
 from .segment import segment_and_realign
 
-__all__ = ["ReconstructionResult", "reconstruct_parity_flips"]
+__all__ = ["ReconstructionResult", "reconstruct_parity_flips_ramped"]
 
 
 @dataclass
@@ -63,39 +63,7 @@ def _cleanest_window_model(iq, dt, period, n_windows, kwargs):
     return best[1]
 
 
-def _decode_with_rate(x, mu_a, mu_b, sigma, p0, n_iter):
-    """Decode, re-estimating the flip rate from the decoded path (hard EM).
-
-    The rate only sets the decoder's prior, so a handful of hard-EM passes is
-    plenty; a full Baum-Welch update would cost a second sweep per iteration for
-    no measurable gain here. The emissions are built once, and the iterations
-    run forward-backward only -- the Viterbi path is needed just once, at the
-    end, to enumerate the events.
-    """
-    n = x.size
-    log_emit = gaussian_log_emissions(x, mu_a, mu_b, sigma)
-    p = float(p0)
-    history = [p]
-    for _ in range(max(1, int(n_iter))):
-        post, _ = forward_backward(log_emit, p)
-        # Thresholded posterior stands in for the Viterbi path here: it is a
-        # transition count, and the two agree except inside parity-blind
-        # windows where the posterior sits near 1/2 either way.
-        crossings = np.count_nonzero(np.diff(post > 0.5))
-        p_new = max(crossings / max(n - 1, 1), 1e-9)
-        history.append(p_new)
-        converged = abs(p_new - p) < 1e-3 * p
-        p = p_new
-        if converged:
-            break
-    post, loglik = forward_backward(log_emit, p)
-    path = viterbi(log_emit, p)
-    res = HMMResult(posterior=post, path=path, log_likelihood=loglik, p_flip=p,
-                    diagnostics={"p_flip_history": history})
-    return res, p, history
-
-
-def reconstruct_parity_flips(
+def reconstruct_parity_flips_ramped(
     iq: np.ndarray,
     sample_rate: float,
     t0: float = 0.0,
@@ -224,7 +192,7 @@ def reconstruct_parity_flips(
     comb: ResetComb | None = None
     final: tuple | None = None  # (result, p, history) reused from the trial
     if model_ramp_resets and emission.fold_period is not None:
-        first, p_first, _ = _decode_with_rate(
+        first, p_first, _ = decode_with_rate(
             x, mu_a, mu_b, emission.sigma, p_flip_init, 2)
         first_times, _ = extract_flips(first.path, first.posterior, dt)
         diag["first_pass_events"] = int(first_times.size)
@@ -234,7 +202,7 @@ def reconstruct_parity_flips(
         if candidate is not None:
             trial = emission.with_reset(t, candidate.period, candidate.phase)
             ta, tb = trial.branch_means()
-            res_t, p_t, hist_t = _decode_with_rate(
+            res_t, p_t, hist_t = decode_with_rate(
                 x, ta, tb, trial.sigma, p_flip_init, n_rate_iterations)
             # A reset schedule that is real explains away a large, strictly
             # periodic block of transitions, so it buys a lot of likelihood.
@@ -251,7 +219,7 @@ def reconstruct_parity_flips(
                 diag["reset_rejected"] = True
 
     if final is None:
-        final = _decode_with_rate(
+        final = decode_with_rate(
             x, mu_a, mu_b, emission.sigma, p_flip_init, n_rate_iterations)
     res, p, history = final
 

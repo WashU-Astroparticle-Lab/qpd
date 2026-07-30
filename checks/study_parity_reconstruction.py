@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from reconstruction_scenarios import build_scenario  # noqa: E402
 
-from qpd.reconstruction import (burst_report, reconstruct_parity_flips,  # noqa: E402
+from qpd.reconstruction import (burst_report, reconstruct_parity_flips_ramped,  # noqa: E402
                                score_flips)
 
 DT = 1e-5
@@ -41,7 +41,7 @@ DT = 1e-5
 
 def _run(scn, seed=0):
     result = scn.simulate(seed=seed)
-    rec = reconstruct_parity_flips(result.iq, scn.sim.sample_rate)
+    rec = reconstruct_parity_flips_ramped(result.iq, scn.sim.sample_rate)
     return result, rec
 
 

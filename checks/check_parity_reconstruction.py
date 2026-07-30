@@ -13,6 +13,8 @@ Covers, on the 500 Hz-ramp reference scenario:
   5. Ramp resets never leak into the output: with 50x more resets than real
      flips, purity is the sharp test.
   6. A second seed, so nothing above is seed-tuned.
+  7. The constant-bias entry point: two stationary blobs, and the parity-blind
+     bias point flagged rather than silently returning nonsense.
 """
 import sys
 from pathlib import Path
@@ -22,9 +24,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from reconstruction_scenarios import build_scenario  # noqa: E402
+from reconstruction_scenarios import (build_scenario,  # noqa: E402
+                                      build_static_scenario)
 
-from qpd.reconstruction import reconstruct_parity_flips, score_flips  # noqa: E402
+from qpd.reconstruction import (reconstruct_parity_flips_ramped,  # noqa: E402
+                               reconstruct_parity_flips_static, score_flips)
 
 _failures = []
 
@@ -38,7 +42,7 @@ def check(name, ok, detail=""):
 
 def run(scn, seed=0):
     result = scn.simulate(seed=seed)
-    rec = reconstruct_parity_flips(result.iq, scn.sim.sample_rate)
+    rec = reconstruct_parity_flips_ramped(result.iq, scn.sim.sample_rate)
     return result, rec, score_flips(result.flip_times, rec.flip_times)
 
 
@@ -110,6 +114,41 @@ def main() -> int:
     check("hard F1 >= 0.88 on seed 7", score_s.hard_f1 >= 0.88,
           f"F1 = {score_s.hard_f1:.3f}, purity = {score_s.purity:.3f}")
     check("reset comb detected on seed 7", rec_s.reset_comb is not None)
+
+    # --- 6. constant-bias reconstruction -----------------------------------
+    print("\n6. Constant bias (reconstruct_parity_flips_static)")
+    scn_c = build_static_scenario(n_g=0.0, duration=5.0, tunnel_rate_hz=10.0)
+    res_c = scn_c.simulate(seed=0)
+    rec_c = reconstruct_parity_flips_static(res_c.iq, scn_c.sim.sample_rate)
+    score_c = score_flips(res_c.flip_times, rec_c.flip_times)
+    check("n_g=0: hard F1 >= 0.95", score_c.hard_f1 >= 0.95,
+          f"F1 = {score_c.hard_f1:.3f}, contrast = {rec_c.contrast:.2f}")
+    check("n_g=0: timing rms <= 20 us", score_c.rms_s <= 20e-6,
+          f"rms = {score_c.rms_s * 1e6:.1f} us")
+    check("n_g=0: rate recovered within 40%", abs(rec_c.rate_hz / 10.0 - 1) < 0.4,
+          f"{rec_c.rate_hz:.1f} Hz vs 10 Hz truth")
+    check("n_g=0: not flagged degenerate", not rec_c.degenerate,
+          f"detectability = {rec_c.diagnostics['detectability']:.0f}")
+
+    # The parity-blind charge: the two branches coincide, so this is
+    # unrecoverable in principle. What matters is that it is *flagged* -- the
+    # fitted contrast alone would not reveal it, since EM splits a single blob
+    # into a spurious pair with contrast ~0.9 either way.
+    scn_d = build_static_scenario(n_g=0.25, duration=5.0, tunnel_rate_hz=10.0)
+    res_d = scn_d.simulate(seed=0)
+    rec_d = reconstruct_parity_flips_static(res_d.iq, scn_d.sim.sample_rate)
+    check("n_g=0.25 (parity-blind) flagged degenerate", rec_d.degenerate,
+          f"detectability = {rec_d.diagnostics['detectability']:.1f}, "
+          f"fitted contrast = {rec_d.contrast:.2f} (spurious)")
+
+    # Cross-check: the static routine must not be used on a ramped trace.
+    scn_r = build_scenario(duration=3.0, burst_rate_hz=0.0)
+    res_r = scn_r.simulate(seed=0)
+    rec_r = reconstruct_parity_flips_static(res_r.iq, scn_r.sim.sample_rate)
+    score_r = score_flips(res_r.flip_times, rec_r.flip_times)
+    check("static routine on a ramped trace does not silently look fine",
+          rec_r.degenerate or score_r.hard_f1 < 0.5,
+          f"F1 = {score_r.hard_f1:.3f}, degenerate = {rec_r.degenerate}")
 
     print()
     if _failures:

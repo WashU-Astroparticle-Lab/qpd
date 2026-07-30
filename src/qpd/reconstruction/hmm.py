@@ -37,6 +37,7 @@ __all__ = [
     "forward_backward",
     "viterbi",
     "decode",
+    "decode_with_rate",
     "forward_backward_reference",
 ]
 
@@ -221,6 +222,47 @@ def decode(
         p_flip=p,
         diagnostics={"p_flip_history": history},
     )
+
+
+def decode_with_rate(
+    x: np.ndarray,
+    mu_a: np.ndarray,
+    mu_b: np.ndarray,
+    sigma: float,
+    p_flip_init: float = 1e-3,
+    n_iter: int = 4,
+) -> tuple[HMMResult, float, list]:
+    """Decode while re-estimating the flip rate from the data (hard EM).
+
+    The rate only sets the decoder's prior, so a handful of hard-EM passes is
+    plenty; a full Baum-Welch update would cost a second sweep per iteration for
+    no measurable gain here. The emissions are built once, and the iterations
+    run forward-backward only -- the Viterbi path is needed just once, at the
+    end, to enumerate the events.
+
+    Returns ``(result, p_flip, history)``.
+    """
+    n = x.size
+    log_emit = gaussian_log_emissions(x, mu_a, mu_b, sigma)
+    p = float(p_flip_init)
+    history = [p]
+    for _ in range(max(1, int(n_iter))):
+        post, _ = forward_backward(log_emit, p)
+        # Thresholded posterior stands in for the Viterbi path here: it is a
+        # transition count, and the two agree except inside low-contrast
+        # windows where the posterior sits near 1/2 either way.
+        crossings = np.count_nonzero(np.diff(post > 0.5))
+        p_new = max(crossings / max(n - 1, 1), 1e-9)
+        history.append(p_new)
+        converged = abs(p_new - p) < 1e-3 * p
+        p = p_new
+        if converged:
+            break
+    post, loglik = forward_backward(log_emit, p)
+    path = viterbi(log_emit, p)
+    res = HMMResult(posterior=post, path=path, log_likelihood=loglik, p_flip=p,
+                    diagnostics={"p_flip_history": history})
+    return res, p, history
 
 
 def forward_backward_reference(
