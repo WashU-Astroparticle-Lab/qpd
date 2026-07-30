@@ -44,16 +44,29 @@ class ResetComb:
     occupancy: float  # detected events per ramp cycle
 
 
-def _pileup(times: np.ndarray, period: float, tol: float):
-    """Strongest phase pile-up at ``period``: (excess, phase, count)."""
+def _pileup(times: np.ndarray, period: float, tol: float, halfwidth: int = 1):
+    """Strongest phase pile-up at ``period``: (excess, phase, count).
+
+    The pile-up is summed over ``halfwidth`` bins either side of the peak rather
+    than read from the single strongest bin. That matters whenever the reset
+    interval is not an exact integer number of samples: the comb then straddles
+    a bin boundary and a single-bin count picks up only part of it. Measured at
+    a 300 Hz ramp, the true period collected 992 of 1500 resets in its best bin
+    while the *harmonic* at 2T -- whose two sub-combs each sit cleanly inside one
+    bin -- collected 738, so a single-bin score ranked the harmonic first and the
+    decoder locked onto twice the true period. Summing the neighbours recovers
+    all 1500 at the true period and restores the correct ordering.
+    """
     n_bins = max(int(round(period / tol)), 4)
     idx = np.minimum((np.mod(times, period) / period * n_bins).astype(np.intp),
                      n_bins - 1)
-    counts = np.bincount(idx, minlength=n_bins)
-    b = int(np.argmax(counts))
-    expected = times.size / n_bins
-    excess = (counts[b] - expected) / np.sqrt(max(expected, 1.0))
-    return float(excess), (b + 0.5) / n_bins * period, int(counts[b])
+    counts = np.bincount(idx, minlength=n_bins).astype(float)
+    window = sum(np.roll(counts, s)
+                 for s in range(-halfwidth, halfwidth + 1))
+    b = int(np.argmax(window))
+    expected = times.size * (2 * halfwidth + 1) / n_bins
+    excess = (window[b] - expected) / np.sqrt(max(expected, 1.0))
+    return float(excess), (b + 0.5) / n_bins * period, int(window[b])
 
 
 def _refit(times: np.ndarray, period: float, phase: float,
@@ -84,19 +97,29 @@ def find_reset_comb(
     dt: float,
     n_fold_max: int = 64,
     min_excess: float = 8.0,
-    min_occupancy: float = 0.35,
-    max_occupancy: float = 1.4,
+    min_occupancy: float = 0.7,
+    max_occupancy: float = 1.3,
 ) -> ResetComb | None:
     """Find the ramp-reset comb hiding in a first-pass event list.
 
     Candidate periods are integer multiples ``k * fold_period``: the ramp spans
     a whole number of half Cooper pairs, so the reset interval is a whole
     number of fold periods. Each candidate is scored by the significance of
-    its strongest phase pile-up.
+    its phase pile-up, summed over neighbouring bins (see :func:`_pileup`).
 
-    The occupancy window is what rejects multiples of the true period. Folding
-    at ``2 T`` collects two resets per cycle and so scores an occupancy near 2,
-    while the true period lands near 1 -- one reset per ramp.
+    Two ways of picking the wrong period have to be excluded, and they need
+    different guards:
+
+    * **Sub-multiples** (``T/j``). Folding at half the true period puts every
+      reset at the same phase but only in every other cycle, so the occupancy
+      falls to ``1/j``. The ``min_occupancy`` floor rejects these -- which is
+      why it sits near 1 and not near 0.
+    * **Super-multiples** (``j*T``). Folding at twice the true period still
+      yields one event per (longer) cycle, so occupancy stays near 1 and cannot
+      discriminate. What separates them is the *count*: a super-multiple
+      collects only ``1/j`` of the resets, so its windowed excess is lower.
+      Taking the largest excess among the survivors therefore picks the
+      fundamental.
 
     Returns None when nothing stands out, which is the correct answer for a
     static ``n_g``, for an even-span sawtooth (whose resets leave the branch

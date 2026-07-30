@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .emission import EmissionModel, learn_emission_model, refine_fold_period
+from .emission import (EmissionModel, learn_emission_model,
+                       refine_fold_period, validate_trace)
 from .events import extract_flips
 from .hmm import decode_with_rate
 from .ramp import ResetComb, find_reset_comb
@@ -34,6 +35,26 @@ class ReconstructionResult:
     def rate_hz(self) -> float:
         """Estimated per-state tunnelling rate."""
         return self.diagnostics.get("rate_hz", float("nan"))
+
+    @property
+    def degenerate(self) -> bool:
+        """True when the output should not be trusted as a list of events.
+
+        The ramped pipeline has two ways to fail that leave every ordinary
+        diagnostic looking healthy, so it needs an explicit self-check:
+
+        * the reset comb locked onto a *multiple* of the true ramp period, so
+          the sign schedule flips on only every j-th reset and the rest are
+          emitted as flips;
+        * the fold period is commensurate with the sample period, so the phase
+          profile is built on a starved grid.
+
+        The test for the first is that **no periodic comb may survive in the
+        output**: real tunnelling is Poisson, so if the reported flip times
+        still pile up at a fixed phase, the reset handling did not do its job.
+        This is rate-invariant, unlike a threshold on the decoded rate.
+        """
+        return bool(self.diagnostics.get("degenerate", False))
 
     @property
     def contrast(self) -> np.ndarray:
@@ -138,9 +159,7 @@ def reconstruct_parity_flips_ramped(
     -------
     ReconstructionResult
     """
-    iq = np.asarray(iq)
-    if iq.ndim != 1 or iq.size < 3:
-        raise ValueError("iq must be a 1-D trace with at least 3 samples")
+    iq = validate_trace(iq, sample_rate)
     dt = 1.0 / float(sample_rate)
     n = iq.size
     t = np.arange(n) * dt
@@ -228,7 +247,24 @@ def reconstruct_parity_flips_ramped(
         keep = conf >= min_confidence
         times, conf = times[keep], conf[keep]
 
+    # Self-check: a periodic comb surviving in the *output* means the reset
+    # schedule is wrong (typically locked to a multiple of the true period).
+    residual = None
+    if emission.fold_period is not None and times.size >= 16:
+        residual = find_reset_comb(times - t0, emission.fold_period,
+                                   n * dt, dt)
+    starved = float(emission.diagnostics.get("phase_bin_counts_min", 1.0)) <= 0
+    median_contrast = (float(np.median(emission.contrast))
+                       if emission.separation.size else float("nan"))
+    detectability = median_contrast * np.sqrt(1.0 / max(p, 1e-12))
+    degenerate = bool(residual is not None or starved)
+
     diag.update({
+        "residual_comb": residual,
+        "degenerate": degenerate,
+        "detectability": float(detectability),
+        "median_contrast": median_contrast,
+        "starved_phase_grid": starved,
         "rate_hz": p / dt,
         "p_flip_history": history,
         "n_flips": int(times.size),

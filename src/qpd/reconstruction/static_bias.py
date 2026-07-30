@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .emission import validate_trace
 from .events import extract_flips
 from .hmm import decode_with_rate
 
@@ -199,11 +200,13 @@ class StaticReconstructionResult:
         """True when the bias point carries no usable parity information.
 
         Near the parity-blind charge (n_g = 0.25 mod 0.5) the two branches
-        coincide, and the fitted separation is *not* a reliable warning: EM
-        splits a single noise blob into a spurious pair, reporting a contrast
-        near 1 rather than 0. The decoded flip rate is the honest tell. A real
-        telegraph dwells for many samples between tunnels, so a fitted rate
-        approaching the sampling rate means the decoder is segmenting noise.
+        coincide, and the fitted separation is *not* a reliable warning on its
+        own: EM splits a single noise blob into a spurious pair, reporting a
+        contrast near 1 rather than 0. The flag therefore requires *both* a low
+        integrated detectability (contrast x sqrt(dwell), which collapses when
+        the decoder is segmenting noise) and a low per-sample contrast -- the
+        second condition being what stops a genuinely fast telegraph, whose
+        dwell is legitimately short, from being mislabelled.
 
         When this is True the ``flip_times`` are meaningless -- move the bias
         point rather than trying to salvage them.
@@ -220,6 +223,7 @@ def reconstruct_parity_flips_static(
     min_confidence: float = 0.0,
     segment_blocks: int = 1,
     min_detectability: float = 70.0,
+    min_contrast: float = 1.5,
     model: StaticBlobModel | None = None,
 ) -> StaticReconstructionResult:
     """Recover parity-flip times from a **fixed-offset-charge** trace, blind.
@@ -259,11 +263,17 @@ def reconstruct_parity_flips_static(
         here moves the blobs outright, and one stale global fit would corrupt the
         whole decode.
     min_detectability : float
-        Below this value of ``contrast * sqrt(dwell in samples)`` the bias point
-        is reported as unusable (see
-        :attr:`StaticReconstructionResult.degenerate`). The default of 70 sits
-        in the empty gap between working points (>= 100) and failing ones
-        (<= 47) measured on the reference device.
+        Threshold on ``contrast * sqrt(dwell in samples)`` -- the contrast
+        integrated over one dwell. Only declares the bias point unusable when
+        ``min_contrast`` also fails; see
+        :attr:`StaticReconstructionResult.degenerate`.
+    min_contrast : float
+        Per-sample contrast above which the bias point is accepted regardless of
+        dwell. This is what keeps a genuinely *fast* telegraph from being
+        mislabelled: a device tunnelling at 3 kHz has a short dwell and so a low
+        integrated detectability, but with the branches well separated per
+        sample its flips are still recovered (measured F1 0.97 at 3 kHz on the
+        reference device).
     model : StaticBlobModel, optional
         Pre-fitted blob model; fitted from ``iq`` when omitted. Supplying one is
         the way to force a known bias point, or to reuse a fit across traces.
@@ -272,9 +282,7 @@ def reconstruct_parity_flips_static(
     -------
     StaticReconstructionResult
     """
-    iq = np.asarray(iq)
-    if iq.ndim != 1 or iq.size < 8:
-        raise ValueError("iq must be a 1-D trace with at least 8 samples")
+    iq = validate_trace(iq, sample_rate, min_samples=8)
     dt = 1.0 / float(sample_rate)
     n = iq.size
     blocks = max(1, int(segment_blocks))
@@ -300,8 +308,19 @@ def reconstruct_parity_flips_static(
             if hi - lo < 8:
                 mu_a[lo:hi], mu_b[lo:hi] = fitted.mu_a, fitted.mu_b
                 sigmas.append(fitted.sigma)
+                per_block.append(fitted)
                 continue
             b = fit_two_blobs(iq[lo:hi])
+            # A block holding too few flips lets EM converge on a degenerate
+            # split, whose centres are nowhere near the true branches. Falling
+            # back to the global fit for that block is always safe: the bias is
+            # constant by assumption, so the global centres are valid
+            # everywhere, and only the *local* refinement is lost.
+            if b.contrast < 0.5 * fitted.contrast:
+                mu_a[lo:hi], mu_b[lo:hi] = fitted.mu_a, fitted.mu_b
+                sigmas.append(fitted.sigma)
+                per_block.append(fitted)
+                continue
             xb = b.project(iq[lo:hi])
             # Re-express the block's centres on the global axis by matching the
             # block's own projected means to their global-axis counterparts.
@@ -321,21 +340,30 @@ def reconstruct_parity_flips_static(
         keep = conf >= min_confidence
         times, conf = times[keep], conf[keep]
 
-    # Self-consistency test for the bias point. What decides whether one dwell
-    # can be told from the next is not the per-sample contrast alone but the
-    # contrast integrated over a dwell: `contrast * sqrt(dwell in samples)`.
+    # Self-consistency test for the bias point. Two statistics are needed
+    # because each fails on a different axis, and the failures do not overlap.
     #
-    # Neither ingredient works by itself. The fitted contrast cannot: EM splits
-    # a single blob into a spurious pair with contrast ~0.9 whether or not the
-    # branches are really separated, so a parity-blind point and a merely noisy
-    # one report the same number. The fitted rate cannot either, since a real
-    # device may genuinely tunnel fast. But the *combination* is decisive,
-    # because decoding noise inflates the rate and so collapses the dwell:
-    # on the reference device every working point scores >= 100 and every
-    # failing one <= 47, with nothing in between.
+    # `detectability` = contrast * sqrt(dwell) separates a parity-blind bias
+    # from a usable one at a fixed flip rate: decoding noise inflates the rate
+    # and collapses the dwell, so the product falls away sharply (measured on
+    # the reference device: 105 at n_g = 0.22, which works, against 6 at
+    # n_g = 0.24, which does not). But it is not scale-free -- a genuinely fast
+    # telegraph also has a short dwell, and a 3 kHz device scores only ~22 while
+    # still reconstructing at F1 0.97.
+    #
+    # The per-sample `contrast` covers exactly that gap, and fails where
+    # detectability works: EM splits a single blob into a spurious pair with
+    # contrast ~0.9, so on its own it cannot tell a blind point (0.90) from a
+    # marginal but usable one (0.96).
+    #
+    # Requiring *both* to fail is what makes the flag trustworthy in each
+    # direction. The likelihood gain of two blobs over one was also tried and
+    # is useless here: it is ~0 for the usable n_g = 0.22 and the blind
+    # n_g = 0.24 alike.
     dwell_samples = 1.0 / max(p, 1e-12)
     detectability = fitted.contrast * np.sqrt(dwell_samples)
-    degenerate = bool(detectability < float(min_detectability))
+    degenerate = bool(detectability < float(min_detectability)
+                      and fitted.contrast < float(min_contrast))
 
     return StaticReconstructionResult(
         flip_times=times,

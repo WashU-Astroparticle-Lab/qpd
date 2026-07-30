@@ -13,6 +13,8 @@ Covers, on the 500 Hz-ramp reference scenario:
   5. Ramp resets never leak into the output: with 50x more resets than real
      flips, purity is the sharp test.
   6. A second seed, so nothing above is seed-tuned.
+  6b. Silent-failure guards: non-finite input, comb harmonics, commensurate
+     fold periods, rate-invariance of the static guard, HMM vs reference.
   7. Plotting helpers render, and reject an out-of-range window.
   8. The constant-bias entry point: two stationary blobs, and the parity-blind
      bias point flagged rather than silently returning nonsense.
@@ -78,8 +80,9 @@ def main() -> int:
     check("timing rms <= 50 us", score.rms_s <= 50e-6,
           f"rms = {score.rms_s * 1e6:.1f} us, bias = {score.bias_s * 1e6:+.1f} us")
     n_reset = int(round(scn.duration / scn.ramp_period))
-    check("false positives far below the reset count",
-          score.n_pred - score.n_matched < 0.01 * n_reset,
+    # The PR advertises zero leaked resets, so gate on that, not on 1%.
+    check("no ramp reset leaks into the output",
+          score.n_pred - score.n_matched == 0,
           f"{score.n_pred - score.n_matched} false vs {n_reset} resets in trace")
 
     # --- 3. quasiparticle bursts -------------------------------------------
@@ -150,6 +153,93 @@ def main() -> int:
     check("static routine on a ramped trace does not silently look fine",
           rec_r.degenerate or score_r.hard_f1 < 0.5,
           f"F1 = {score_r.hard_f1:.3f}, degenerate = {rec_r.degenerate}")
+
+    # --- 6b. failure modes that used to be silent --------------------------
+    # Every check here corresponds to a bug that returned tens of thousands of
+    # fabricated flip times with no error and every diagnostic looking normal.
+    print("\n6b. Silent-failure guards")
+
+    # (i) Non-finite input. One NaN used to alternate the Viterbi path at every
+    # sample, and defeated the static degeneracy flag via contrast = inf.
+    bad = res_c.iq.copy()
+    bad[len(bad) // 2] = np.nan
+    for name, fn in (("ramped", reconstruct_parity_flips_ramped),
+                     ("static", reconstruct_parity_flips_static)):
+        try:
+            fn(bad, scn_c.sim.sample_rate)
+            check(f"{name}: one NaN sample rejected", False, "no exception")
+        except ValueError:
+            check(f"{name}: one NaN sample rejected", True)
+    try:
+        reconstruct_parity_flips_ramped(res_c.iq, 0.0)
+        check("non-positive sample_rate rejected", False, "no exception")
+    except ValueError:
+        check("non-positive sample_rate rejected", True)
+
+    # (ii) Reset comb must find the fundamental, not a multiple. At 300 Hz the
+    # ramp period is a non-integer number of samples, so the comb straddles a
+    # phase bin and a single-bin score used to rank 2T above T.
+    for ramp in (300.0, 700.0):
+        scn_h = build_scenario(ramp_hz=ramp, duration=5.0, burst_rate_hz=0.0)
+        _, rec_h, score_h = run(scn_h)
+        got = rec_h.reset_comb.n_fold if rec_h.reset_comb else None
+        check(f"ramp {ramp:.0f} Hz: comb finds the fundamental (n_fold=11)",
+              got == 11, f"n_fold = {got}, F1 = {score_h.hard_f1:.3f}")
+        check(f"ramp {ramp:.0f} Hz: hard F1 >= 0.90",
+              score_h.hard_f1 >= 0.90, f"F1 = {score_h.hard_f1:.3f}")
+
+    # (iii) A fold period commensurate with the sample period starves the phase
+    # grid; the sign schedule then anchored on an empty bin.
+    scn_c2 = build_scenario(ramp_hz=454.5454, duration=5.0, burst_rate_hz=0.0)
+    _, rec_c2, score_c2 = run(scn_c2)
+    min_bin = rec_c2.emission.diagnostics.get("phase_bin_counts_min", 0)
+    check("commensurate fold period: no empty phase bins", min_bin > 0,
+          f"min bin count = {min_bin:.0f}, "
+          f"bins = {rec_c2.emission.diagnostics.get('n_phase_bins')}")
+    check("commensurate fold period: hard F1 >= 0.90",
+          score_c2.hard_f1 >= 0.90, f"F1 = {score_c2.hard_f1:.3f}")
+
+    # (iv) No periodic comb may survive in the output -- that is the signature
+    # of a mis-locked reset period, and it is what `degenerate` reports.
+    check("reference decode not flagged degenerate", not rec.degenerate,
+          f"residual comb = {rec.diagnostics.get('residual_comb')}")
+
+    # (v) The static guard must be rate-invariant: a genuinely fast telegraph
+    # at a good bias is usable, and must not be called degenerate.
+    scn_f = build_static_scenario(n_g=0.0, duration=3.0, tunnel_rate_hz=3000.0)
+    res_f = scn_f.simulate(seed=0)
+    rec_f = reconstruct_parity_flips_static(res_f.iq, scn_f.sim.sample_rate)
+    score_f = score_flips(res_f.flip_times, rec_f.flip_times)
+    check("fast telegraph (3 kHz) not flagged degenerate",
+          not rec_f.degenerate and score_f.hard_f1 >= 0.90,
+          f"F1 = {score_f.hard_f1:.3f}, detectability = "
+          f"{rec_f.diagnostics['detectability']:.1f}, contrast = {rec_f.contrast:.2f}")
+
+    # (vi) Per-block static fits must not poison a good reconstruction.
+    for nb in (4, 17):
+        rec_b2 = reconstruct_parity_flips_static(
+            res_c.iq, scn_c.sim.sample_rate, segment_blocks=nb)
+        s_b2 = score_flips(res_c.flip_times, rec_b2.flip_times)
+        check(f"segment_blocks={nb} keeps hard F1 >= 0.95",
+              s_b2.hard_f1 >= 0.95, f"F1 = {s_b2.hard_f1:.3f}")
+
+    # (vii) The fast two-state HMM must equal the general reference.
+    from qpd.reconstruction.hmm import (forward_backward,
+                                        forward_backward_reference)
+    rng = np.random.default_rng(0)
+    worst_post = worst_ll = 0.0
+    for _ in range(50):
+        m = int(rng.integers(1, 40))
+        le = rng.normal(size=(2, m)) * 3.0
+        pf = float(10 ** rng.uniform(-6, -0.4))
+        post, ll = forward_backward(le, pf)
+        log_t = np.log([[1 - pf, pf], [pf, 1 - pf]])
+        post_ref, ll_ref = forward_backward_reference(le, log_t)
+        worst_post = max(worst_post, float(np.max(np.abs(post - post_ref[1]))))
+        worst_ll = max(worst_ll, abs(ll - ll_ref))
+    check("fast 2-state forward-backward == general reference",
+          worst_post < 1e-9 and worst_ll < 1e-8,
+          f"max posterior dev {worst_post:.1e}, max loglik dev {worst_ll:.1e}")
 
     # --- 7. plotting helpers -----------------------------------------------
     print("\n7. Plotting helpers (headless smoke test)")

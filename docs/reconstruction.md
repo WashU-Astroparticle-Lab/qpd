@@ -31,6 +31,7 @@ the statistical machinery is built up from scratch in [§5](#5-the-hidden-markov
 12. [Scoring against truth](#12-scoring-against-truth)
 13. [What sets the limits](#13-what-sets-the-limits)
 14. [Reproducing the numbers](#14-reproducing-the-numbers)
+14b. [Looking at the result](#14b-looking-at-the-result)
 15. [Glossary](#15-glossary)
 
 ---
@@ -89,7 +90,7 @@ information across many samples in the statistically correct way.
 | $x_k$ | the trace projected onto one real axis (§4) | a.u. |
 | $c(t)$ | *common mode*: midpoint of the two branches | a.u. |
 | $h(t)$ | *signed splitting*: separation of the two branches | a.u. |
-| $C = | h|/\sigma$ | **contrast** — separation in units of noise | — |
+| $C = \lVert h \rVert/\sigma$ (magnitude of $h$ over $\sigma$) | **contrast** — separation in units of noise | — |
 | $P$ | *fold period* — see §7 | s |
 | $T$ | sawtooth ramp period — see §8 | s |
 | $\delta$ | size of an offset-charge jump, in Cooper pairs | — |
@@ -138,15 +139,22 @@ Note the sign flip either side of $n_g = 0.25$. Which branch is "upper" swaps
 every time we cross a blind point — a bookkeeping detail that becomes important
 in §7.
 
-**Fact 2 — the splitting is small compared with the resonator linewidth.**
+**Fact 2 — the drive is parked far off resonance.**
 
-The two branches shift the resonator by $\le 5.5$ MHz, against a linewidth
-$\kappa \approx 243$ kHz but with the drive parked far out on the Lorentzian
-tail. The practical consequence is that as the parity flips, the measured
-$S_{21}$ moves back and forth along an essentially **straight line segment** in
-the complex plane. It does not swing around an arc. (Measured on the reference
-device, the direction of the difference vector is constant to about 3 mrad
-across the whole sweep.)
+The readout tone sits a detuning $\Delta = 12.94$ MHz from the resonator,
+against a linewidth $\kappa = 243$ kHz — so $|\Delta| = 53\kappa$. Far off
+resonance the notch response linearises: the parity-dependent part of $S_{21}$
+becomes one **fixed complex vector** multiplied by a *real* factor
+$\propto 1/\Delta$. Two parities therefore differ only in that real scale, so
+the difference vector cannot rotate — it can only change length and sign.
+
+That is the whole justification for §4, and it is worth being careful about
+*why*, because the obvious argument is wrong. The splitting is **not** small
+compared with the linewidth: at 5.46 MHz it is $22\kappa$, and it is not small
+compared with the detuning either ($0.42\Delta$). Neither ratio is what matters.
+The residual rotation is set by $\kappa/\Delta \approx 0.02$, and measured over
+$n_g \in [0, 0.5]$ the direction of the difference vector is constant to
+**0.42 mrad**.
 
 Fact 2 is what makes §4 possible.
 
@@ -534,8 +542,9 @@ free from the forward pass, §5.3). This gate means a trace with no such ramp �
 a static bias, an even-span sawtooth, a triangle wave with no reset — is left
 untouched.
 
-Measured effect: hard $F_1$ goes from **0.20 → 0.94**, and **0 of 2500** resets
-in a 5 s trace leak into the output.
+Measured effect of turning the reset model off and on (`model_ramp_resets`):
+hard $F_1$ goes **0.034 → 1.000** on a clean 5 s trace and **0.151 → 0.933**
+with quasiparticle bursts present. **0 of 2500** resets leak into the output.
 
 ---
 
@@ -584,7 +593,10 @@ a flip. This is a genuine limit of the measurement, not of the algorithm.
 The transition probability $p$ is itself unknown. It is estimated by **hard EM**:
 
 1. decode with the current $p$;
-2. count transitions in the decoded path, set $p \leftarrow (\text{count})/(n-1)$;
+2. count the crossings of the thresholded posterior ($\gamma_k$ passing
+   $1/2$) — a cheap stand-in for Viterbi transitions, which agrees with them
+   except inside parity-blind windows — and set
+   $p \leftarrow (\text{count})/(n-1)$;
 3. repeat until stable (a handful of iterations).
 
 The rate only sets the decoder's *prior*, so this crude scheme is adequate — a
@@ -662,8 +674,9 @@ Degradation is graceful down to $C \approx 1$; timing rms scales roughly as
 $1/C$, flooring near the sample period. The collapse at $C \approx 0.7$ is a
 **calibration** failure, not a decoding one: the reset comb of §8 no longer
 stands out of the first-pass event list, and the 500 Hz artefacts flood the
-output. Useful design rule: rms $\approx (\Delta t/2)\times(5/C)$, so 25 µs timing
-needs $C \ge 2$.
+output. Useful design rule, fitted to the table above: rms $\approx \Delta t\times(5/C)$
+(predicting 4.7 / 18.9 / 28 / 46 µs at $C$ = 10.7 / 2.7 / 1.8 / 1.1), so 25 µs
+timing needs $C \ge 2$.
 
 **(b) Event crowding.** Inside a quasiparticle burst, tens of tunnels arrive
 within milliseconds. Two flips separated by less than about two samples (20 µs)
@@ -696,7 +709,7 @@ is lost; in the static case a bad bias point loses everything (§6.1).
 ## 14. Reproducing the numbers
 
 ```bash
-# regression gate (~1 min)
+# regression gate (~2 min)
 python checks/check_parity_reconstruction.py
 
 # performance studies: rate / noise / burst-crowding / device sweeps

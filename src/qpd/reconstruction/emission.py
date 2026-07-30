@@ -10,10 +10,15 @@ readout under an offset-charge ramp:
    twice per period (at the parity-blind points n_g = 0.25 mod 0.5). Under a
    linear ramp this becomes a periodic function of time with fold period
    ``P = 0.5 / slope``.
-2. Because the splitting is small compared with the resonator linewidth, the
-   two branch means differ along an essentially **fixed line** in the I/Q
-   plane -- the difference vector reverses at each blind point but does not
-   rotate. So the whole problem projects onto one real axis.
+2. Because the drive is parked far off resonance (detuning 12.94 MHz against
+   a linewidth of 243 kHz, so |Delta| = 53 kappa), the parity-dependent part
+   of S21 reduces to one fixed complex vector scaled by a *real* factor
+   ~ 1/Delta. The two branch means therefore differ along an essentially
+   **fixed line** in the I/Q plane -- the difference vector reverses at each
+   blind point but does not rotate -- and the whole problem projects onto one
+   real axis. Note the naive argument (that the splitting is small compared
+   with the linewidth) is false here: the splitting is 22 kappa. Measured
+   direction spread over n_g in [0, 0.5] is 0.42 mrad.
 3. The common mode barely moves (a few percent of the noise), so the parity
    signal lives in the trace's *spread*, not its mean. That is what makes the
    period recoverable: the projected variance is ``sigma^2 + h(t)^2 / 4``,
@@ -43,6 +48,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 __all__ = [
+    "validate_trace",
     "EmissionModel",
     "estimate_direction",
     "estimate_fold_period",
@@ -148,6 +154,35 @@ class EmissionModel:
                                "phase_offset": np.asarray(offset, dtype=float)})
         out.diagnostics = {**self.diagnostics}
         return out.refresh(t)
+
+
+def validate_trace(iq: np.ndarray, sample_rate: float,
+                   min_samples: int = 3) -> np.ndarray:
+    """Reject traces that would otherwise decode into fabricated events.
+
+    A single non-finite sample is enough to poison everything downstream: the
+    projection origin is the trace mean, so one NaN makes every emission NaN,
+    and in :func:`~qpd.reconstruction.hmm.viterbi` a NaN comparison is always
+    False, so the backtrace alternates state at every step and returns one
+    "flip" per sample. Nothing about that failure looks abnormal in the
+    diagnostics, so it has to be caught at the door. Real DAQ traces do contain
+    dropouts.
+    """
+    iq = np.asarray(iq)
+    if iq.ndim != 1 or iq.size < min_samples:
+        raise ValueError(
+            f"iq must be a 1-D trace with at least {min_samples} samples; "
+            f"got shape {iq.shape}")
+    if not np.isfinite(sample_rate) or sample_rate <= 0:
+        raise ValueError(f"sample_rate must be positive and finite; "
+                         f"got {sample_rate!r}")
+    if not np.all(np.isfinite(iq)):
+        bad = int(np.count_nonzero(~np.isfinite(iq)))
+        raise ValueError(
+            f"iq contains {bad} non-finite sample(s) (NaN or inf). One is "
+            "enough to make the decoder emit a flip at every sample; drop or "
+            "interpolate them before reconstructing.")
+    return iq
 
 
 def estimate_direction(iq: np.ndarray) -> tuple[complex, complex, float]:
@@ -264,9 +299,15 @@ def estimate_fold_period(
     band = (freqs >= lo_f) & (freqs <= hi_f)
     if not np.any(band):
         return None, {"reason": "empty search band"}
-    spec_band = np.where(band, spec, 0.0)
-    k = int(np.argmax(spec_band))
-    prominence = float(spec[k] / np.median(spec[band]))
+    # argmax over the in-band slice only: a whole-array argmax returns the DC
+    # bin (index 0, out of band) when the in-band spectrum is flat or all-NaN,
+    # and 1/freqs[0] is a division by zero.
+    band_idx = np.flatnonzero(band)
+    k = int(band_idx[np.argmax(spec[band_idx])])
+    denom = float(np.median(spec[band]))
+    prominence = float(spec[k] / denom) if denom > 0 else 0.0
+    if not np.isfinite(prominence) or freqs[k] <= 0:
+        return None, {"reason": "no usable spectral peak", "peak_hz": float(freqs[k])}
     diag = {"peak_hz": float(freqs[k]), "prominence": prominence}
     if prominence < significance:
         diag["reason"] = "no significant modulation"
@@ -388,7 +429,20 @@ def learn_emission_model(
     phase = np.mod(t / period - offset, 1.0)
     sel = (slice(None) if profile_slice is None
            else slice(int(profile_slice[0]), int(profile_slice[1])))
-    mean_b, var_b, counts = _folded_profiles(x[sel], phase[sel], n_bins)
+    # The sampling grid only ever visits P/dt distinct phases when the fold
+    # period is commensurate with the sample period, and then most of a fixed
+    # bin grid is empty. Left unchecked the empty bins get a splitting of zero
+    # and `argmin` anchors the whole sign schedule on one of them, which turns
+    # the decode into noise -- silently, since every other diagnostic still
+    # looks normal. Shrink the grid until every bin is populated.
+    n_bins = int(n_bins)
+    while n_bins > 8:
+        mean_b, var_b, counts = _folded_profiles(x[sel], phase[sel], n_bins)
+        if counts.min() > 0:
+            break
+        n_bins //= 2
+    else:
+        mean_b, var_b, counts = _folded_profiles(x[sel], phase[sel], n_bins)
     mean_b = _smooth_periodic(mean_b, smooth_bins)
     var_b = _smooth_periodic(var_b, smooth_bins)
     # var = sigma^2 + h^2/4 for a balanced two-branch mixture.
@@ -417,6 +471,7 @@ def learn_emission_model(
             "max_contrast": float(mag_b.max() / sigma),
             "median_contrast": float(np.median(mag_b) / sigma),
             "phase_bin_counts_min": float(counts.min()),
+            "n_phase_bins": int(n_bins),
         },
     )
     return model.refresh(t)
