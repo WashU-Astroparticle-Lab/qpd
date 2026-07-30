@@ -82,14 +82,14 @@ information across many samples in the statistically correct way.
 | $z_k = I_k + \mathrm{i}Q_k$ | complex readout sample | a.u. |
 | $n_g$ | offset charge, in units of one Cooper pair ($2e$) | — |
 | $S_k \in \{A, B\}$ | hidden parity branch at sample $k$ | — |
-| $\chi_{\rm even}, \chi_{\rm odd}$ | dispersive shift for each parity | Hz |
+| $\chi_{\mathrm{even}}, \chi_{\mathrm{odd}}$ | dispersive shift for each parity | Hz |
 | $\Gamma$ | quasiparticle tunnelling rate (per state) | Hz |
-| $p = \Gamma\,\Delta t$ | probability of a flip between consecutive samples | — |
+| $p = \Gamma \Delta t$ | probability of a flip between consecutive samples | — |
 | $\sigma$ | noise standard deviation, per quadrature | a.u. |
 | $x_k$ | the trace projected onto one real axis (§4) | a.u. |
 | $c(t)$ | *common mode*: midpoint of the two branches | a.u. |
 | $h(t)$ | *signed splitting*: separation of the two branches | a.u. |
-| $C = \lvert h\rvert/\sigma$ | **contrast** — separation in units of noise | — |
+| $C = | h|/\sigma$ | **contrast** — separation in units of noise | — |
 | $P$ | *fold period* — see §7 | s |
 | $T$ | sawtooth ramp period — see §8 | s |
 | $\delta$ | size of an offset-charge jump, in Cooper pairs | — |
@@ -108,16 +108,16 @@ Two facts about the physics do all the work.
 
 **Fact 1 — odd parity is even parity, shifted by half a Cooper pair.**
 
-$$\chi_{\rm odd}(n_g) \;=\; \chi_{\rm even}\!\left(n_g + \tfrac{1}{2}\right)$$
+$$\chi_{\mathrm{odd}}(n_g) = \chi_{\mathrm{even}}\left(n_g + \frac{1}{2}\right)$$
 
-and $\chi_{\rm even}$ is periodic with period 1 and is an even function of $n_g$.
+and $\chi_{\mathrm{even}}$ is periodic with period 1 and is an even function of $n_g$.
 So if we define the **signed splitting**
 
-$$h(n_g) \;\equiv\; \chi_{\rm odd}(n_g) - \chi_{\rm even}(n_g),$$
+$$h(n_g) \equiv \chi_{\mathrm{odd}}(n_g) - \chi_{\mathrm{even}}(n_g),$$
 
 then $h$ is periodic and, crucially, it **passes through zero**. The zeros sit at
 
-$$n_g = 0.25 \pmod{0.5}.$$
+$$n_g = 0.25 (\mathrm{mod}\ 0.5).$$
 
 At those offset charges the two parity states produce *exactly the same*
 resonator frequency. They are called **parity-blind points**: no measurement,
@@ -126,7 +126,7 @@ shortcoming of the algorithm, and it recurs throughout these notes.
 
 Numerically, for the reference device ($E_J/E_C = 12$, $g = 150$ MHz):
 
-| $n_g$ | $\chi_{\rm even}$ (MHz) | $\chi_{\rm odd}$ (MHz) | $h$ (MHz) |
+| $n_g$ | $\chi_{\mathrm{even}}$ (MHz) | $\chi_{\mathrm{odd}}$ (MHz) | $h$ (MHz) |
 |---|---|---|---|
 | 0.00 | 27.94 | 22.48 | −5.46 |
 | 0.10 | 27.28 | 22.89 | −4.39 |
@@ -140,7 +140,7 @@ in §7.
 
 **Fact 2 — the splitting is small compared with the resonator linewidth.**
 
-The two branches shift the resonator by $\lesssim 5.5$ MHz, against a linewidth
+The two branches shift the resonator by $\le 5.5$ MHz, against a linewidth
 $\kappa \approx 243$ kHz but with the drive parked far out on the Lorentzian
 tail. The practical consequence is that as the parity flips, the measured
 $S_{21}$ moves back and forth along an essentially **straight line segment** in
@@ -158,8 +158,7 @@ Each sample $z_k$ is a point in the complex plane. Under branch $S_k$ its
 expected position is $\mu_{S_k}(t_k)$, and the measurement adds isotropic
 Gaussian noise of width $\sigma$ **independently to $I$ and to $Q$**:
 
-$$z_k \;=\; \mu_{S_k}(t_k) \;+\; \varepsilon_k, \qquad
-\varepsilon_k \sim \mathcal{N}(0,\sigma^2) + \mathrm{i}\,\mathcal{N}(0,\sigma^2).$$
+$$z_k = \mu_{S_k}(t_k) + \varepsilon_k, \quad \varepsilon_k \sim \mathcal{N}(0,\sigma^2) + \mathrm{i} \mathcal{N}(0,\sigma^2).$$
 
 By Fact 2 the two means $\mu_A$ and $\mu_B$ differ only along one fixed
 direction. Call the unit vector along that direction $\hat{d}$ (a complex number
@@ -168,13 +167,13 @@ along $\hat{d}$; the perpendicular component is pure noise and can be discarded.
 
 Define the **projection**
 
-$$x_k \;\equiv\; \operatorname{Re}\!\left[\, \overline{\hat{d}}\,(z_k - o) \,\right],$$
+$$x_k \equiv \mathrm{Re}\left[ \overline{\hat{d}} (z_k - o) \right],$$
 
 where $\overline{\hat{d}}$ is the complex conjugate and $o$ is any convenient
 origin (we use the mean of the trace). Because a projection of an isotropic
 Gaussian is a 1-D Gaussian of the *same* width, $x_k$ satisfies
 
-$$x_k \sim \mathcal{N}\!\big(m_{S_k}(t_k),\ \sigma^2\big),$$
+$$x_k \sim \mathcal{N}(m_{S_k}(t_k),\ \sigma^2),$$
 
 with $m_A, m_B$ the projected branch means. **The two-dimensional problem is now
 one-dimensional, with no loss of information.**
@@ -192,11 +191,11 @@ ramp. (`estimate_direction` in [`emission.py`](../src/qpd/reconstruction/emissio
 
 It is convenient to write the two projected means as a midpoint plus a splitting:
 
-$$m_A = c + \tfrac{h}{2}, \qquad m_B = c - \tfrac{h}{2},$$
+$$m_A = c + \frac{h}{2}, \quad m_B = c - \frac{h}{2},$$
 
 so $c$ is the **common mode** and $h$ the **signed splitting**. The **contrast**
 
-$$\boxed{\;C \;=\; \frac{|h|}{\sigma}\;}$$
+$$C = \frac{|h|}{\sigma}$$
 
 is the single most important number in these notes: it is the branch separation
 measured in units of the noise. At the reference operating point the median
@@ -232,13 +231,13 @@ The parity is a *Markov chain*: the probability of the next state depends only o
 the current state, not on the whole history. For a symmetric telegraph with rate
 $\Gamma$ per state, the probability of flipping between two consecutive samples is
 
-$$p \;=\; \Gamma\,\Delta t .$$
+$$p = \Gamma \Delta t .$$
 
 (At $\Gamma = 10$ Hz and $\Delta t = 10\ \mu$s, $p = 10^{-4}$ — flips are indeed
 rare per sample.) The transition matrix is
 
-$$\mathbf{T} \;=\; \begin{pmatrix} 1-p & p \\ p & 1-p \end{pmatrix},
-\qquad T_{ss'} = P(S_{k+1}=s' \mid S_k = s).$$
+$$\mathbf{T} = \begin{pmatrix} 1-p & p \\ p & 1-p \end{pmatrix},
+ \quad T_{ss'} = P(S_{k+1}=s' \mid S_k = s).$$
 
 This is the term that stops one noisy sample from being read as a flip: flipping
 "costs" a factor $p/(1-p)$ in probability, so the evidence has to be worth more
@@ -248,8 +247,8 @@ than that.
 
 Given the branch, the sample is Gaussian about that branch's mean:
 
-$$P(x_k \mid S_k = s) \;=\; \frac{1}{\sqrt{2\pi\sigma^2}}
-\exp\!\left[-\frac{\big(x_k - m_s(t_k)\big)^2}{2\sigma^2}\right].$$
+$$P(x_k \mid S_k = s) = \frac{1}{\sqrt{2\pi\sigma^2}}
+\exp\left[-\frac{(x_k - m_s(t_k))^2}{2\sigma^2}\right].$$
 
 We work with the logarithm, $\ell_k(s) \equiv \log P(x_k \mid S_k=s)$, because
 products of $10^6$ small numbers underflow any floating-point format.
@@ -262,7 +261,7 @@ sample to sample. The HMM does not care — it only ever needs $\ell_k(s)$.
 We want, for each $k$, the probability that the branch was $B$ **given the whole
 trace**:
 
-$$\gamma_k \;\equiv\; P\!\left(S_k = B \,\middle|\, x_1,\dots,x_n\right).$$
+$$\gamma_k = P(S_k = B \mid x_1, \dots, x_n).$$
 
 Note "given the whole trace" — including samples *after* $k$. Data from the
 future genuinely helps: if the next 5000 samples all look like branch $B$, that
@@ -270,34 +269,33 @@ is strong evidence sample $k$ was already $B$.
 
 Define two quantities:
 
-$$\alpha_k(s) \;\equiv\; P\!\left(x_1,\dots,x_k,\ S_k=s\right)
-\qquad\text{(forward)}$$
-$$\beta_k(s) \;\equiv\; P\!\left(x_{k+1},\dots,x_n \,\middle|\, S_k=s\right)
-\qquad\text{(backward)}$$
+$$\alpha_k(s) = P(x_1, \dots, x_k,\ S_k = s) \quad\text{— the forward variable}$$
+
+$$\beta_k(s) = P(x_{k+1}, \dots, x_n \mid S_k = s) \quad\text{— the backward variable}$$
 
 **Forward recursion.** To be in state $s'$ at step $k+1$ having seen the data so
 far, we must have been in *some* state $s$ at step $k$, transitioned, and then
 emitted $x_{k+1}$:
 
-$$\boxed{\;\alpha_{k+1}(s') \;=\; \Big[\textstyle\sum_{s} \alpha_k(s)\,T_{ss'}\Big]\; P(x_{k+1}\mid s')\;}$$
+$$\alpha_{k+1}(s') = \left[ \sum_{s} \alpha_k(s) T_{ss'} \right] P(x_{k+1} \mid s')$$
 
 started from $\alpha_1(s) = P(S_1=s)P(x_1\mid s)$, with $P(S_1=s) = 1/2$ (we have
 no prior preference for even or odd).
 
 **Backward recursion.** Symmetrically, running from the end of the trace inwards:
 
-$$\boxed{\;\beta_k(s) \;=\; \textstyle\sum_{s'} T_{ss'}\;P(x_{k+1}\mid s')\;\beta_{k+1}(s')\;}$$
+$$\beta_k(s) = \sum_{s'} T_{ss'} P(x_{k+1} \mid s') \beta_{k+1}(s')$$
 
 started from $\beta_n(s) = 1$.
 
 **Combining.** Because the chain is Markov, past and future are conditionally
 independent given the present state, so
 
-$$P(S_k = s,\ \text{all data}) \;=\; \alpha_k(s)\,\beta_k(s),$$
+$$P(S_k = s,\ \text{all data}) = \alpha_k(s) \beta_k(s),$$
 
 and normalising over the two states gives what we wanted:
 
-$$\gamma_k \;=\; \frac{\alpha_k(B)\beta_k(B)}{\alpha_k(A)\beta_k(A) + \alpha_k(B)\beta_k(B)}.$$
+$$\gamma_k = \frac{\alpha_k(B)\beta_k(B)}{\alpha_k(A)\beta_k(A) + \alpha_k(B)\beta_k(B)}.$$
 
 Both recursions visit each sample once, so the cost is $O(n)$ — linear in the
 length of the trace, with only two states to track.
@@ -321,7 +319,7 @@ definite sequence: the single most likely assignment $S_1,\dots,S_n$ as a whole.
 That is the **Viterbi** algorithm — dynamic programming, structurally the same as
 the forward recursion but with $\sum$ replaced by $\max$:
 
-$$\boxed{\;\delta_{k+1}(s') \;=\; \max_{s}\Big[\delta_k(s) + \log T_{ss'}\Big] \;+\; \ell_{k+1}(s')\;}$$
+$$\delta_{k+1}(s') = \max_{s} \left[ \delta_k(s) + \log T_{ss'} \right] + \ell_{k+1}(s')$$
 
 working in logs throughout ($\delta_k(s)$ is the log-probability of the best path
 that ends in state $s$ at step $k$). At each step we record *which* $s$ achieved
@@ -355,18 +353,16 @@ period, no blind point sweeping past, no ramp reset. Entry point:
 
 The projected data is a **two-component Gaussian mixture**:
 
-$$P(x) \;=\; w\,\mathcal{N}(x; m_A, \sigma^2) \;+\; (1-w)\,\mathcal{N}(x; m_B, \sigma^2),$$
+$$P(x) = w \mathcal{N}(x; m_A, \sigma^2) + (1-w) \mathcal{N}(x; m_B, \sigma^2),$$
 
 with $w$ the fraction of time spent in branch $A$. We fit $m_A, m_B, \sigma, w$
 by **expectation–maximisation (EM)**, which alternates two steps until converged:
 
 - **E-step** — given current parameters, compute each sample's *responsibility*,
   the probability it came from branch $A$:
-  $$r_k \;=\; \frac{w\,\mathcal{N}(x_k; m_A,\sigma^2)}{w\,\mathcal{N}(x_k; m_A,\sigma^2) + (1-w)\,\mathcal{N}(x_k; m_B,\sigma^2)}.$$
+  $$r_k = \frac{w \mathcal{N}(x_k; m_A,\sigma^2)}{w \mathcal{N}(x_k; m_A,\sigma^2) + (1-w) \mathcal{N}(x_k; m_B,\sigma^2)}.$$
 - **M-step** — re-estimate the parameters as responsibility-weighted averages:
-  $$m_A = \frac{\sum_k r_k x_k}{\sum_k r_k},\qquad
-    m_B = \frac{\sum_k (1-r_k) x_k}{\sum_k (1-r_k)},\qquad
-    w = \frac{1}{n}\sum_k r_k,$$
+  $$m_A = \frac{\sum_k r_k x_k}{\sum_k r_k}, \quad m_B = \frac{\sum_k (1-r_k) x_k}{\sum_k (1-r_k)}, \quad w = \frac{1}{n}\sum_k r_k,$$
   and $\sigma^2$ as the pooled weighted variance.
 
 EM is initialised by splitting at the **median** of $x$. That is a deliberate
@@ -388,8 +384,7 @@ superficially the same as at a good bias point.
 
 The honest tell is the *combination* of contrast and decoded dwell time. Define
 
-$$\text{detectability} \;=\; C\,\sqrt{N_{\rm dwell}},
-\qquad N_{\rm dwell} = 1/p,$$
+$$\text{detectability} = C \sqrt{N_\mathrm{dwell}}, \quad N_\mathrm{dwell} = 1/p,$$
 
 the contrast integrated over one dwell (the $\sqrt{N}$ is the usual averaging
 gain for $N$ independent samples). If the decoder is really segmenting noise, the
@@ -416,7 +411,9 @@ It hurts because the branch means now *move*, and we must learn how.
 Since $|h|$ is periodic in $n_g$ with period 0.5, and a linear ramp makes $n_g$
 proportional to $t$, the splitting is periodic **in time**:
 
-$$P \;=\; \frac{0.5}{\text{ramp slope}} \qquad\text{(the \emph{fold period})}.$$
+$$P = \frac{0.5}{\text{ramp slope}}$$
+
+which we call the **fold period**.
 
 For the reference scenario the slope is $5.5 \times 500 = 2750$ per second, so
 $P = 181.8\ \mu$s — about 18 samples.
@@ -431,9 +428,9 @@ and averaging the trace would destroy it.
 Consider the square of the projection. Over a phase bin where the parity is
 equally likely to be $A$ or $B$, the mean of $x$ is $c$ and
 
-$$\mathbb{E}\!\left[(x-c)^2\right]
-\;=\; \underbrace{\sigma^2}_{\text{noise}} \;+\; \underbrace{\left(\tfrac{h}{2}\right)^2}_{\text{branch offset}}
-\;=\; \sigma^2 + \frac{h^2}{4}.$$
+$$E\left[(x-c)^2\right] = \sigma^2 + \left(\frac{h}{2}\right)^2 = \sigma^2 + \frac{h^2}{4}.$$
+
+The first term is the noise; the second is the branch offset.
 
 *Derivation:* with probability $1/2$ the sample sits at $c + h/2$ plus noise, and
 with probability $1/2$ at $c - h/2$ plus noise. In either case the offset from
@@ -452,11 +449,10 @@ period because a wrong period smears the profile flat.
 ### 7.3 Folding, and the profile
 
 With $P$ in hand, assign each sample a **phase**
-$\varphi_k = \operatorname{frac}(t_k/P) \in [0,1)$, bin the samples by $\varphi$,
+$\varphi_k = \mathrm{frac}(t_k/P) \in [0,1)$, bin the samples by $\varphi$,
 and in each bin compute the mean and variance of $x$. Then
 
-$$c(\varphi) = \text{bin mean},\qquad
-|h(\varphi)| = 2\sqrt{\max\big(\text{bin variance} - \sigma^2,\ 0\big)},$$
+$$c(\varphi) = \text{bin mean}, \quad |h(\varphi)| = 2\sqrt{\max(\text{bin variance} - \sigma^2,\ 0)},$$
 
 inverting the relation above. Because every bin pools thousands of samples from
 across the whole trace, the profile is measured very precisely even though any
@@ -469,7 +465,7 @@ branch is currently upper. From §3, $h$ changes sign at every parity-blind poin
 and there is exactly one blind point per fold period (the minimum of $|h|$). So
 the sign simply **alternates from one half-cycle to the next**:
 
-$$h(t) \;=\; (-1)^{\lfloor t/P - \varphi_{\rm blind}\rfloor}\,\big|h(\varphi)\big|.$$
+$$h(t) = (-1)^{\lfloor t/P - \varphi_{\mathrm{blind}}\rfloor} |h(\varphi)|.$$
 
 The overall sign is not identifiable — flipping it globally just swaps the labels
 "even" and "odd." That is harmless: it does not move any flip *time*, which is
@@ -568,7 +564,7 @@ Two subtleties, both found the hard way:
 1. **Chicken-and-egg.** You need a splitting profile to find the jump, but a
    whole-trace profile is already corrupted *by* the jump. Worst at
    $\delta = 0.25$, which blends the profile with its own half-period shift,
-   making it nearly period-$\tfrac12$ — at which point an offset of 0 is
+   making it nearly period-$\frac12$ — at which point an offset of 0 is
    indistinguishable from 0.5. Fix: build the profile from a **single window**
    (jump-free for every window the jump misses) and pick the window with the
    highest contrast, since blending always costs contrast.
@@ -626,14 +622,13 @@ assignment problem, solved exactly with the Hungarian algorithm
 tolerance-gated graph is split into connected components and solved per
 component — exact, since no edge crosses a component boundary.
 
-**Metrics.** With $N_{\rm true}$ true events, $N_{\rm pred}$ predicted, and
-$N_{\rm match}$ matched:
+**Metrics.** With $N_{\mathrm{true}}$ true events, $N_{\mathrm{pred}}$ predicted, and
+$N_{\mathrm{match}}$ matched:
 
-$$\text{efficiency (recall)} = \frac{N_{\rm match}}{N_{\rm true}},\qquad
-\text{purity (precision)} = \frac{N_{\rm match}}{N_{\rm pred}},$$
+$$\text{efficiency (recall)} = \frac{N_{\mathrm{match}}}{N_{\mathrm{true}}}, \quad \text{purity (precision)} = \frac{N_{\mathrm{match}}}{N_{\mathrm{pred}}},$$
 
-$$F_1 \;=\; \frac{2\,N_{\rm match}}{N_{\rm true} + N_{\rm pred}}
-\;=\; \text{harmonic mean of efficiency and purity}.$$
+$$F_1 = \frac{2 N_{\mathrm{match}}}{N_{\mathrm{true}} + N_{\mathrm{pred}}}
+ = \text{harmonic mean of efficiency and purity}.$$
 
 $F_1$ is used because it punishes both failure modes: missing real events *and*
 inventing fake ones. A detector that reports nothing has perfect purity; one that
@@ -668,7 +663,7 @@ $1/C$, flooring near the sample period. The collapse at $C \approx 0.7$ is a
 **calibration** failure, not a decoding one: the reset comb of §8 no longer
 stands out of the first-pass event list, and the 500 Hz artefacts flood the
 output. Useful design rule: rms $\approx (\Delta t/2)\times(5/C)$, so 25 µs timing
-needs $C \gtrsim 2$.
+needs $C \ge 2$.
 
 **(b) Event crowding.** Inside a quasiparticle burst, tens of tunnels arrive
 within milliseconds. Two flips separated by less than about two samples (20 µs)
@@ -728,6 +723,40 @@ score_flips(result.flip_times, rec.flip_times)   # efficiency, purity, F1, rms
 
 ---
 
+## 14b. Looking at the result
+
+`qpd.reconstruction` ships two quick-look helpers so a reconstruction can be
+eyeballed rather than taken on trust — the *input* and the *output* on one time
+axis.
+
+```python
+from qpd.reconstruction import plot_trace_with_flips, plot_iq_plane
+
+# raw I and Q, with reconstructed tunnelling times overlaid
+plot_trace_with_flips(result.iq, 1e5, rec.flip_times,
+                      truth_times=result.flip_times,   # omit for measured data
+                      window=(0.0, 0.6), smooth_hz=300.0)
+```
+
+Green solid = truth, red dashed = reconstructed, so agreement (and
+disagreement) is visible at a glance. `confidence=rec.confidence` scales each
+detected line's opacity, making low-confidence flips look tentative.
+
+**Which view to use depends on the regime, and this matters.** At a *fixed*
+bias the raw I/Q shows the telegraph directly — with `smooth_hz` the steps are
+unmistakable. Under a *swept* `n_g` the raw I/Q is dominated by the ramp (5.5
+kHz at the reference scenario) and an individual flip is simply not visible by
+eye: as §7.2 explains, the parity there lives in the trace's *spread*, not its
+mean. For that case pass `projected=True, emission=rec.emission` to plot the
+learned discrimination axis with $\mu_A(t), \mu_B(t)$ overlaid, which is the
+view in which flips become apparent.
+
+`plot_iq_plane(result.iq, branch=rec.branch, model=rec.model)` shows the
+complex plane coloured by decoded branch — the picture behind §4, where at a
+fixed bias you can see the two blobs and the single line joining them.
+
+---
+
 ## 15. Glossary
 
 **Blind (reconstruction).** Using only the recorded trace and its sample rate;
@@ -762,7 +791,7 @@ probability of each hidden state given the *entire* sequence.
 transitions, observed only through noisy emissions. *Not* HMC (Hamiltonian Monte
 Carlo), which is unrelated.
 
-**Parity-blind point.** An offset charge, $n_g = 0.25 \pmod{0.5}$, where the two
+**Parity-blind point.** An offset charge, $n_g = 0.25 (\mathrm{mod}\ 0.5)$, where the two
 parity branches produce identical signals and no measurement can separate them.
 
 **Projection.** Collapsing the complex I/Q sample onto the single real axis along

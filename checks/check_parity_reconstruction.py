@@ -13,7 +13,8 @@ Covers, on the 500 Hz-ramp reference scenario:
   5. Ramp resets never leak into the output: with 50x more resets than real
      flips, purity is the sharp test.
   6. A second seed, so nothing above is seed-tuned.
-  7. The constant-bias entry point: two stationary blobs, and the parity-blind
+  7. Plotting helpers render, and reject an out-of-range window.
+  8. The constant-bias entry point: two stationary blobs, and the parity-blind
      bias point flagged rather than silently returning nonsense.
 """
 import sys
@@ -149,6 +150,42 @@ def main() -> int:
     check("static routine on a ramped trace does not silently look fine",
           rec_r.degenerate or score_r.hard_f1 < 0.5,
           f"F1 = {score_r.hard_f1:.3f}, degenerate = {rec_r.degenerate}")
+
+    # --- 7. plotting helpers -----------------------------------------------
+    print("\n7. Plotting helpers (headless smoke test)")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from qpd.reconstruction import plot_iq_plane, plot_trace_with_flips
+
+    try:
+        fig, axs = plot_trace_with_flips(
+            res_c.iq, scn_c.sim.sample_rate, rec_c.flip_times,
+            truth_times=res_c.flip_times, window=(0.0, 0.3), smooth_hz=300.0)
+        ok_raw = len(np.atleast_1d(axs)) == 2
+        plt.close(fig)
+        fig, ax = plot_trace_with_flips(
+            res.iq, scn.sim.sample_rate, rec.flip_times,
+            truth_times=res.flip_times, window=(0.010, 0.013),
+            projected=True, emission=rec.emission,
+            confidence=rec.confidence)
+        plt.close(fig)
+        fig, ax = plot_iq_plane(res_c.iq, branch=rec_c.branch, model=rec_c.model)
+        plt.close(fig)
+        check("plot_trace_with_flips / plot_iq_plane render", ok_raw,
+              "raw I/Q (2 panels), projected, and I/Q plane all rendered")
+    except Exception as exc:  # noqa: BLE001 - a render failure is the finding
+        check("plot_trace_with_flips / plot_iq_plane render", False, repr(exc))
+
+    # A window outside the trace is a caller error, not a silent empty plot.
+    try:
+        plot_trace_with_flips(res_c.iq, scn_c.sim.sample_rate,
+                              window=(99.0, 99.1))
+        check("out-of-range window raises", False, "no exception raised")
+    except ValueError:
+        check("out-of-range window raises", True)
+    except Exception as exc:  # noqa: BLE001
+        check("out-of-range window raises", False, f"wrong type: {exc!r}")
 
     print()
     if _failures:

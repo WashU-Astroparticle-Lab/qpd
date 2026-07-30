@@ -39,6 +39,7 @@ from qpd.reconstruction.emission import (
     learn_emission_model,
 )
 from qpd.reconstruction.events import extract_flips, flip_confidence
+from qpd.reconstruction.plotting import plot_iq_plane, plot_trace_with_flips
 from qpd.reconstruction.hmm import (
     HMMResult,
     decode,
@@ -84,6 +85,9 @@ __all__ = [
     "decode_with_rate",
     "forward_backward",
     "viterbi",
+    # plotting
+    "plot_trace_with_flips",
+    "plot_iq_plane",
     "FlipScore",
     "score_flips",
     "window_report",
