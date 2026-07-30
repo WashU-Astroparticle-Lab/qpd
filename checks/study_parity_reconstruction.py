@@ -2,9 +2,15 @@
 """Performance studies for blind parity-flip timing reconstruction.
 
 Run: ``python checks/study_parity_reconstruction.py [study ...]``
-with ``study`` one or more of ``rate``, ``burst``, ``device`` (default: all).
+with ``study`` one or more of ``rate``, ``noise``, ``burst``, ``device``
+(default: all).
 
   rate    -- efficiency, purity and timing vs the background tunnelling rate.
+  noise   -- efficiency, purity and timing vs the readout noise sigma at the
+             fixed reference operating point. The branch splitting is set by
+             the device, so sigma directly sets the per-sample contrast; this
+             sweep locates the contrast threshold where blind reconstruction
+             (including its own nuisance calibration) breaks down.
   burst   -- reconstruction efficiency and timing bias as a function of how
              many quasiparticle tunnels land in the burst window. This is the
              regime where events crowd: two flips inside a few samples are not
@@ -77,6 +83,52 @@ def study_rate(duration=20.0, seeds=(0, 7)):
         print(f"{rate:8.0f} {est:8.1f} {n_t:6d} {n_p:6d} {eff:7.3f} {pur:7.3f} "
               f"{hf1:7.3f} {sf1:7.3f} {bias:+8.1f} {rms:7.1f} {con:9.2f}")
     print("\nSummed over seeds " + str(seeds) + f"; {duration:g} s per trace.")
+
+
+def study_noise(duration=15.0, seeds=(0, 7)):
+    print()
+    print("=" * 100)
+    print("STUDY 1b --  readout noise level (reference device, 500 Hz ramp, "
+          "10 Hz tunnelling, no bursts)")
+    print("=" * 100)
+    print("Everything else held at the reference operating point, so this "
+          "isolates noise from the\ndevice/LO conflation in the E_J/E_C sweep. "
+          "'contrast' = median |mu_A - mu_B| / sigma per sample;\n"
+          "'P ok' / 'comb' report whether the blind nuisance calibration "
+          "itself survived.\n")
+    print(f"{'sigma':>8s} {'contrast':>9s} {'P ok':>5s} {'comb':>5s} "
+          f"{'truth':>6s} {'pred':>6s} {'effic':>7s} {'purity':>7s} "
+          f"{'hardF1':>7s} {'softF1':>7s} {'bias/us':>8s} {'rms/us':>7s}")
+    p_true = None
+    for sigma in (0.5e-4, 1e-4, 1.5e-4, 2e-4, 3e-4, 4e-4, 5e-4, 8e-4):
+        rows = []
+        for seed in seeds:
+            scn = build_scenario(duration=duration, tunnel_rate_hz=10.0,
+                                 burst_rate_hz=0.0, sigma=sigma, seed=seed)
+            p_true = scn.fold_period
+            res, rec = _run(scn, seed=seed)
+            rows.append((score_flips(res.flip_times, rec.flip_times), rec))
+        con = np.median([np.median(r[1].emission.contrast) for r in rows])
+        p_ok = all(r[1].emission.fold_period is not None
+                   and abs(r[1].emission.fold_period / p_true - 1) < 1e-3
+                   for r in rows)
+        comb = all(r[1].reset_comb is not None for r in rows)
+        eff = np.mean([r[0].efficiency for r in rows])
+        pur = np.mean([r[0].purity for r in rows])
+        hf1 = np.mean([r[0].hard_f1 for r in rows])
+        sf1 = np.mean([r[0].soft_f1 for r in rows])
+        bias = np.nanmean([r[0].bias_s for r in rows]) * 1e6
+        rms = np.nanmean([r[0].rms_s for r in rows]) * 1e6
+        n_t = int(np.sum([r[0].n_truth for r in rows]))
+        n_p = int(np.sum([r[0].n_pred for r in rows]))
+        print(f"{sigma:8.1e} {con:9.2f} {'yes' if p_ok else 'NO':>5s} "
+              f"{'yes' if comb else 'NO':>5s} {n_t:6d} {n_p:6d} {eff:7.3f} "
+              f"{pur:7.3f} {hf1:7.3f} {sf1:7.3f} {bias:+8.1f} {rms:7.1f}")
+    print("\nSummed over seeds " + str(seeds) + f"; {duration:g} s per trace. "
+          "The branch splitting is fixed by the device\n(median "
+          "|mu_A - mu_B| ~ 5e-4), so sigma sets the contrast directly. "
+          "Timing rms should tighten as\ncontrast grows (sharper posterior "
+          "crossings) until it floors near the 10 us sample period.")
 
 
 def study_burst(duration=20.0, seed=0):
@@ -155,9 +207,11 @@ def study_device(duration=5.0, seed=0):
 
 def main(argv):
     wanted = [a for a in argv[1:] if not a.startswith("-")] or \
-        ["rate", "burst", "device"]
+        ["rate", "noise", "burst", "device"]
     if "rate" in wanted:
         study_rate()
+    if "noise" in wanted:
+        study_noise()
     if "burst" in wanted:
         study_burst()
     if "device" in wanted:
