@@ -37,6 +37,67 @@ class ReconstructionResult:
         return self.diagnostics.get("rate_hz", float("nan"))
 
     @property
+    def sample_fidelity(self) -> float:
+        """Mean single-sample parity assignment fidelity across the sweep.
+
+        The swept case differs from the fixed-bias one in a way that matters
+        here: the contrast is not a constant. It sweeps, passing through zero
+        at every parity-blind crossing, so the per-sample assignment fidelity
+        is a *function of ramp phase* -- unity where the branches are far apart
+        and exactly 1/2 at the crossings. This property averages
+        ``1 - erfc(C_k / (2*sqrt(2))) / 2`` over the trace.
+
+        Because that average includes the blind crossings, it is a
+        substantially pessimistic summary of the reconstruction, which does not
+        classify samples independently (see :attr:`decoded_fidelity`). Use
+        :meth:`fidelity_vs_phase` to see where in the sweep the information
+        actually lives.
+        """
+        from scipy.special import erfc
+        c = np.asarray(self.contrast, dtype=float)
+        if c.size == 0 or not np.all(np.isfinite(c)):
+            return float("nan")
+        return float(np.mean(1.0 - 0.5 * erfc(c / (2.0 * np.sqrt(2.0)))))
+
+    @property
+    def decoded_fidelity(self) -> float:
+        """Expected fraction of samples assigned to the correct branch.
+
+        Read off the posterior as ``1 - mean(min(g, 1-g))``. Same caveat as in
+        the fixed-bias case: this measures self-consistency with the fitted
+        model, not correctness, so it stays high when the model itself is wrong.
+        Read it together with :attr:`degenerate`.
+        """
+        g = np.asarray(self.posterior, dtype=float)
+        if g.size == 0:
+            return float("nan")
+        return float(1.0 - np.mean(np.minimum(g, 1.0 - g)))
+
+    def fidelity_vs_phase(self, n_bins: int = 32):
+        """Single-sample assignment fidelity as a function of ramp phase.
+
+        Returns ``(phase, fidelity)`` with ``phase`` the fold phase in [0, 1).
+        This is the honest picture for a swept bias: the parity information is
+        concentrated away from the blind crossings, and this shows how much of
+        the sweep is actually useful. Returns ``(None, None)`` when no ramp was
+        detected.
+        """
+        from scipy.special import erfc
+        if self.emission is None or self.emission.fold_period is None:
+            return None, None
+        dt = float(self.diagnostics.get("dt", 0.0))
+        if dt <= 0:
+            return None, None
+        c = np.asarray(self.contrast, dtype=float)
+        f = 1.0 - 0.5 * erfc(c / (2.0 * np.sqrt(2.0)))
+        phase = np.mod(np.arange(c.size) * dt / self.emission.fold_period, 1.0)
+        idx = np.minimum((phase * n_bins).astype(np.intp), n_bins - 1)
+        counts = np.bincount(idx, minlength=n_bins)
+        sums = np.bincount(idx, weights=f, minlength=n_bins)
+        ok = counts > 0
+        return ((np.arange(n_bins)[ok] + 0.5) / n_bins, sums[ok] / counts[ok])
+
+    @property
     def degenerate(self) -> bool:
         """True when the output should not be trusted as a list of events.
 
@@ -47,7 +108,12 @@ class ReconstructionResult:
           the sign schedule flips on only every j-th reset and the rest are
           emitted as flips;
         * the fold period is commensurate with the sample period, so the phase
-          profile is built on a starved grid.
+          profile is built on a starved grid;
+        * the trace is simply too noisy, in which case the decoder segments
+          noise and the branch assignment is no better than a coin flip. This
+          one produces *no* periodic structure, so it needs the contrast test
+          rather than the comb test (measured: median contrast 0.67, decoded
+          fidelity 0.96, true accuracy 0.500).
 
         The test for the first is that **no periodic comb may survive in the
         output**: real tunnelling is Poisson, so if the reported flip times
@@ -96,6 +162,8 @@ def reconstruct_parity_flips_ramped(
     model_ramp_resets: bool = True,
     n_profile_windows: int = 6,
     n_segment_iterations: int = 3,
+    min_detectability: float = 70.0,
+    min_contrast: float = 1.0,
     **emission_kwargs,
 ) -> ReconstructionResult:
     """Recover parity-flip times from a complex readout trace, blind.
@@ -149,6 +217,11 @@ def reconstruct_parity_flips_ramped(
     n_profile_windows : int
         Number of windows tried when picking a jump-free splitting profile to
         drive the change-point search (see :func:`_cleanest_window_model`).
+    min_detectability, min_contrast : float
+        Thresholds behind :attr:`ReconstructionResult.degenerate`. The trace is
+        called unusable only when the median contrast falls below
+        ``min_contrast`` *and* the contrast integrated over a dwell falls below
+        ``min_detectability`` -- see the note there.
     n_segment_iterations : int
         Alternations between locating the jumps and polishing the fold period.
         One pass suffices for a fast ramp; a slow ramp has too few fold cycles
@@ -257,7 +330,15 @@ def reconstruct_parity_flips_ramped(
     median_contrast = (float(np.median(emission.contrast))
                        if emission.separation.size else float("nan"))
     detectability = median_contrast * np.sqrt(1.0 / max(p, 1e-12))
-    degenerate = bool(residual is not None or starved)
+    # Same two-condition test as the fixed-bias path: the branches must be
+    # separated either per sample (contrast) or after integrating over a dwell
+    # (detectability). Requiring both to fail is what stops a genuinely fast
+    # telegraph being mislabelled, while still catching a trace that is simply
+    # too noisy -- which the residual-comb test alone does not see, since a
+    # decoder segmenting pure noise produces no periodic structure at all.
+    too_noisy = bool(detectability < float(min_detectability)
+                     and median_contrast < float(min_contrast))
+    degenerate = bool(residual is not None or starved or too_noisy)
 
     diag.update({
         "residual_comb": residual,
@@ -265,6 +346,7 @@ def reconstruct_parity_flips_ramped(
         "detectability": float(detectability),
         "median_contrast": median_contrast,
         "starved_phase_grid": starved,
+        "dt": dt,
         "rate_hz": p / dt,
         "p_flip_history": history,
         "n_flips": int(times.size),

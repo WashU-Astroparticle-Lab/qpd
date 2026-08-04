@@ -62,6 +62,7 @@ def plot_trace_with_flips(
     baseline=False,
     max_points=20000,
     confidence=None,
+    min_confidence=0.0,
     figsize=(9.5, 4.6),
     title=None,
     axes=None,
@@ -110,6 +111,12 @@ def plot_trace_with_flips(
         Per-flip confidence in ``[0, 1]`` (``rec.confidence``), matched to
         ``flip_times``; scales the opacity of each detected line so
         low-confidence flips are visibly tentative.
+    min_confidence : float
+        Draw only flips whose confidence is at least this. Filtering at *plot*
+        time rather than passing ``min_confidence`` to the reconstruction keeps
+        the full event list intact and changes only the view, so the same
+        result can be re-plotted at several thresholds. Requires
+        ``confidence``; the count actually drawn is reported in the title.
     figsize, title, axes
         Usual matplotlib escapes. ``axes`` must hold two axes when
         ``projected`` is False, one when it is True.
@@ -149,13 +156,29 @@ def plot_trace_with_flips(
         times = np.asarray(times, dtype=float)
         return times[(times >= lo) & (times <= hi)]
 
+    n_dropped = 0
+    if (flip_times is not None and confidence is not None
+            and min_confidence > 0.0):
+        c_all = np.asarray(confidence, dtype=float)
+        f_all = np.asarray(flip_times, dtype=float)
+        if c_all.size != f_all.size:
+            raise ValueError(
+                f"confidence has {c_all.size} entries but flip_times has "
+                f"{f_all.size}; they must correspond one-to-one")
+        keep = c_all >= float(min_confidence)
+        n_dropped = int(np.count_nonzero(~keep))
+        flip_times, confidence = f_all[keep], c_all[keep]
+
     det, tru = _events(flip_times), _events(truth_times)
     conf_in = None
     if confidence is not None and flip_times is not None:
         c = np.asarray(confidence, dtype=float)
         ft = np.asarray(flip_times, dtype=float)
-        if c.size == ft.size:
-            conf_in = c[(ft >= lo) & (ft <= hi)]
+        if c.size != ft.size:
+            raise ValueError(
+                f"confidence has {c.size} entries but flip_times has "
+                f"{ft.size}; they must correspond one-to-one")
+        conf_in = c[(ft >= lo) & (ft <= hi)]
 
     def _mark(ax):
         for tt in tru:
@@ -233,7 +256,12 @@ def plot_trace_with_flips(
             if tru.size:
                 bits.append(f"{tru.size} true")
             if det.size:
-                bits.append(f"{det.size} detected")
+                label = f"{det.size} detected"
+                if min_confidence > 0.0:
+                    label += f" at confidence >= {min_confidence:g}"
+                bits.append(label)
+            if n_dropped:
+                bits.append(f"{n_dropped} below threshold hidden")
             bits.append("green = truth, red dashed = reconstructed"
                         if tru.size and det.size else "")
             title = "  |  ".join(b for b in bits if b)
