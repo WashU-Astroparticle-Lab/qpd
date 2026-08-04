@@ -196,6 +196,48 @@ class StaticReconstructionResult:
         return self.model.contrast if self.model is not None else float("nan")
 
     @property
+    def sample_fidelity(self) -> float:
+        """Single-sample parity assignment fidelity, from the fitted contrast.
+
+        This is the conventional readout-fidelity figure: with two equal-width
+        Gaussians a contrast ``C`` apart and the threshold at their midpoint,
+        each sample is misassigned with probability
+        ``0.5 * erfc(C / (2*sqrt(2)))``, and the fidelity is one minus that.
+
+        It describes *one sample in isolation*, so it is a pessimistic view of
+        what this pipeline achieves: the decoder does not classify samples
+        independently, it integrates over a dwell (see
+        :attr:`decoded_fidelity`). Quote this when comparing against a
+        single-shot readout, not when describing the reconstruction.
+        """
+        from scipy.special import erfc
+        c = self.contrast
+        if not np.isfinite(c):
+            return float("nan")
+        return float(1.0 - 0.5 * erfc(c / (2.0 * np.sqrt(2.0))))
+
+    @property
+    def decoded_fidelity(self) -> float:
+        """Expected fraction of samples assigned to the correct branch.
+
+        Read straight off the posterior: a sample whose posterior is ``g`` is
+        misassigned with probability ``min(g, 1-g)`` *under the fitted model*,
+        so the mean of that over the trace is the model's own estimate of its
+        per-sample error rate. Because the HMM pools evidence across a whole
+        dwell, this is far higher than :attr:`sample_fidelity`.
+
+        **It is conditional on the model being right.** At a parity-blind bias
+        the fitted two-blob model is spurious, and the decoder can be
+        confidently wrong -- this number stays high while the output is
+        meaningless. Always read it together with :attr:`degenerate` and
+        :attr:`contrast`; it measures self-consistency, not correctness.
+        """
+        g = np.asarray(self.posterior, dtype=float)
+        if g.size == 0:
+            return float("nan")
+        return float(1.0 - np.mean(np.minimum(g, 1.0 - g)))
+
+    @property
     def degenerate(self) -> bool:
         """True when the bias point carries no usable parity information.
 

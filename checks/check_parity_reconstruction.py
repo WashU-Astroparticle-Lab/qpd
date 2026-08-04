@@ -15,6 +15,8 @@ Covers, on the 500 Hz-ramp reference scenario:
   6. A second seed, so nothing above is seed-tuned.
   6b. Silent-failure guards: non-finite input, comb harmonics, commensurate
      fold periods, rate-invariance of the static guard, HMM vs reference.
+  6c. Fidelity estimators validated against truth, including the blind and
+     too-noisy cases where the posterior is confidently wrong.
   7. Plotting helpers render, and reject an out-of-range window.
   8. The constant-bias entry point: two stationary blobs, and the parity-blind
      bias point flagged rather than silently returning nonsense.
@@ -240,6 +242,53 @@ def main() -> int:
     check("fast 2-state forward-backward == general reference",
           worst_post < 1e-9 and worst_ll < 1e-8,
           f"max posterior dev {worst_post:.1e}, max loglik dev {worst_ll:.1e}")
+
+    # --- 6c. fidelity estimation -------------------------------------------
+    print("\n6c. Fidelity estimation (both entry points)")
+
+    # decoded_fidelity must track the true per-sample accuracy where the model
+    # is sound -- that is the whole claim being made for it.
+    def _true_accuracy(branch, parity):
+        a = float(np.mean(np.asarray(branch) == np.asarray(parity)))
+        return max(a, 1.0 - a)
+
+    acc_c = _true_accuracy(rec_c.branch, res_c.parity)
+    check("static: decoded_fidelity tracks true accuracy",
+          abs(rec_c.decoded_fidelity - acc_c) < 0.01,
+          f"predicted {rec_c.decoded_fidelity:.4f} vs true {acc_c:.4f}")
+    check("static: sample_fidelity is the pessimistic single-shot figure",
+          rec_c.sample_fidelity <= rec_c.decoded_fidelity + 1e-9,
+          f"sample {rec_c.sample_fidelity:.4f} <= decoded "
+          f"{rec_c.decoded_fidelity:.4f}")
+
+    acc_r = _true_accuracy(rec.branch, res.parity)
+    check("ramped: decoded_fidelity tracks true accuracy",
+          abs(rec.decoded_fidelity - acc_r) < 0.01,
+          f"predicted {rec.decoded_fidelity:.4f} vs true {acc_r:.4f}")
+    ph, fid = rec.fidelity_vs_phase(n_bins=16)
+    check("ramped: fidelity_vs_phase resolves the blind crossing",
+          ph is not None and float(np.min(fid)) < 0.75 < float(np.max(fid)),
+          f"min {np.min(fid):.2f}, max {np.max(fid):.2f} over ramp phase")
+
+    # The case that makes the caveat necessary: at a parity-blind bias the
+    # posterior is confidently wrong, so decoded_fidelity is NOT a correctness
+    # measure on its own. What must hold is that `degenerate` catches it.
+    acc_d = _true_accuracy(rec_d.branch, res_d.parity)
+    check("blind bias: decoded_fidelity is optimistic (hence the caveat)",
+          rec_d.decoded_fidelity > acc_d + 0.1,
+          f"claims {rec_d.decoded_fidelity:.3f}, truth {acc_d:.3f}")
+    check("blind bias: degenerate catches what fidelity does not",
+          rec_d.degenerate)
+
+    # A too-noisy swept trace: no periodic structure survives, so the residual
+    # comb test cannot see it -- the contrast test must.
+    scn_n = build_scenario(duration=5.0, burst_rate_hz=0.0, sigma=8e-4)
+    res_n, rec_n, score_n = run(scn_n)
+    acc_n = _true_accuracy(rec_n.branch, res_n.parity)
+    check("ramped: too-noisy trace flagged degenerate",
+          rec_n.degenerate,
+          f"true accuracy {acc_n:.3f} (coin flip), F1 {score_n.hard_f1:.3f}, "
+          f"median contrast {np.median(rec_n.contrast):.2f}")
 
     # --- 7. plotting helpers -----------------------------------------------
     print("\n7. Plotting helpers (headless smoke test)")
