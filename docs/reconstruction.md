@@ -546,6 +546,46 @@ Measured effect of turning the reset model off and on (`model_ramp_resets`):
 hard $F_1$ goes **0.034 → 1.000** on a clean 5 s trace and **0.151 → 0.933**
 with quasiparticle bursts present. **0 of 2500** resets leak into the output.
 
+### 8.3 If the ramp period is known from the hardware
+
+The generator's frequency is usually known to far better precision than this
+analysis needs, while its trigger offset relative to the digitiser is not. That
+asymmetry is worth exploiting, and `reconstruct_parity_flips_ramped` takes
+`ramp_period=T` for it. The phase does **not** need to be supplied.
+
+Knowing $T$ does three things:
+
+1. **The fold period is re-locked** to $P = T/m$ for integer $m = \mathrm{round}(T/\hat P)$ — the generator's precision rather than the fit's.
+2. **The harmonic ambiguity disappears** — no search over candidate multiples.
+3. **The phase becomes a one-parameter problem**, found by scanning the HMM likelihood over $\varphi \in [0, T)$. This does not use the first-pass event list at all; it asks the trace directly which reset phase best explains it, which is why it survives where the blind search has already failed.
+
+The gain is concentrated entirely at low contrast, because comb detection — not
+decoding — is what fails first:
+
+| contrast | blind | `ramp_period=T` |
+|---|---|---|
+| 2.66 | 1.000 | 1.000 |
+| 1.34 | 0.952 | 0.952 |
+| 0.90 | 0.899 | 0.899 |
+| **0.67** | **0.023** (comb lost) | **0.920** |
+
+Above contrast ≈1.3 it changes nothing. Its value is moving the breakdown from
+a contrast near 0.9 down to about 0.5.
+
+**A supplied period is not taken on trust.** Commensurability is no test —
+almost any value sits near *some* integer multiple of $P$, so a wrong one
+passes that check and then produces garbage (measured: $1.37\,T$ accepted as
+$m = 15$, F1 0.002). The supplied period must instead earn its place on the same
+two tests the blind comb faces: it must improve the likelihood over using no
+comb, and leave no periodic residue in the output. If it fails, the model is
+restored to its pre-lock state, the blind search runs, and
+`ramp_period_rejected` appears in the diagnostics.
+
+Below contrast ≈0.5 the fold period itself is no longer detectable from the
+spectrum, and `ramp_period` alone cannot help — pass `fold_period=T/m` as well,
+which needs $m$, i.e. the ramp span in Cooper pairs (gate lever arm × amplitude).
+With both supplied, F1 0.016 → 0.784 at contrast 0.45.
+
 ---
 
 ## 9. Nuisance 2 — offset-charge jumps
