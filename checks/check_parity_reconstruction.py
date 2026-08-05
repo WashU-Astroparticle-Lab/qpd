@@ -17,6 +17,8 @@ Covers, on the 500 Hz-ramp reference scenario:
      fold periods, rate-invariance of the static guard, HMM vs reference.
   6c. Fidelity estimators validated against truth, including the blind and
      too-noisy cases where the posterior is confidently wrong.
+  6d. A hardware-known ramp period: rescues the low-contrast regime, and a
+     wrong value is rejected on evidence rather than accepted.
   7. Plotting helpers render, and reject an out-of-range window.
   8. The constant-bias entry point: two stationary blobs, and the parity-blind
      bias point flagged rather than silently returning nonsense.
@@ -289,6 +291,50 @@ def main() -> int:
           rec_n.degenerate,
           f"true accuracy {acc_n:.3f} (coin flip), F1 {score_n.hard_f1:.3f}, "
           f"median contrast {np.median(rec_n.contrast):.2f}")
+
+    # --- 6d. known ramp period from hardware -------------------------------
+    print("\n6d. Supplying the ramp period (hardware known, phase unknown)")
+    T_ramp = scn.ramp_period
+
+    # Where the blind path already works, supplying the period must not hurt.
+    _, rec_k, score_k = run(scn)
+    rec_hw = reconstruct_parity_flips_ramped(res.iq, scn.sim.sample_rate,
+                                             ramp_period=T_ramp)
+    score_hw = score_flips(res.flip_times, rec_hw.flip_times)
+    check("known ramp period: no regression where blind already works",
+          score_hw.hard_f1 >= score_k.hard_f1 - 0.02,
+          f"blind {score_k.hard_f1:.3f} -> supplied {score_hw.hard_f1:.3f}")
+    check("known ramp period: phase recovered without being told it",
+          rec_hw.reset_comb is not None
+          and rec_hw.reset_comb.n_fold == int(scn.half_pairs_per_ramp),
+          f"n_fold = {rec_hw.reset_comb.n_fold if rec_hw.reset_comb else None}, "
+          f"phase/T = "
+          f"{(rec_hw.reset_comb.phase / T_ramp) if rec_hw.reset_comb else float('nan'):.3f}")
+
+    # The regime it exists for: too noisy for the blind comb search.
+    scn_lo = build_scenario(duration=5.0, burst_rate_hz=0.0, sigma=8e-4)
+    res_lo = scn_lo.simulate(seed=0)
+    blind_lo = reconstruct_parity_flips_ramped(res_lo.iq, scn_lo.sim.sample_rate)
+    hw_lo = reconstruct_parity_flips_ramped(res_lo.iq, scn_lo.sim.sample_rate,
+                                            ramp_period=scn_lo.ramp_period)
+    f_blind = score_flips(res_lo.flip_times, blind_lo.flip_times).hard_f1
+    f_hw = score_flips(res_lo.flip_times, hw_lo.flip_times).hard_f1
+    check("known ramp period rescues the low-contrast regime",
+          f_blind < 0.2 and f_hw > 0.8,
+          f"blind {f_blind:.3f} (comb "
+          f"{'found' if blind_lo.reset_comb else 'lost'}) -> supplied {f_hw:.3f}")
+
+    # A wrong hardware number must be rejected on evidence, not accepted
+    # because it happens to be commensurate with the fold period.
+    for factor, tag in ((1.37, "incommensurate"), (2.0, "harmonic"),
+                        (0.5, "sub-harmonic")):
+        rec_bad = reconstruct_parity_flips_ramped(
+            res.iq, scn.sim.sample_rate, ramp_period=T_ramp * factor)
+        s_bad = score_flips(res.flip_times, rec_bad.flip_times)
+        rejected = "ramp_period_rejected" in rec_bad.diagnostics
+        check(f"wrong ramp period ({tag}) rejected and falls back cleanly",
+              rejected and s_bad.hard_f1 >= 0.90,
+              f"rejected={rejected}, F1 after fallback = {s_bad.hard_f1:.3f}")
 
     # --- 7. plotting helpers -----------------------------------------------
     print("\n7. Plotting helpers (headless smoke test)")
