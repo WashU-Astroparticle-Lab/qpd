@@ -30,6 +30,8 @@ the statistical machinery is built up from scratch in [§5](#5-the-hidden-markov
 11. [From a decoded sequence to flip times](#11-from-a-decoded-sequence-to-flip-times)
 12. [Scoring against truth](#12-scoring-against-truth)
 12b. [How good is it? Fidelity without truth](#12b-how-good-is-it-fidelity-without-truth)
+12c. [Efficiency and accuracy on measured data, by surrogate replay](#12c-efficiency-and-accuracy-on-measured-data-by-surrogate-replay)
+12d. [Diagnostics: rate response and burst response](#12d-diagnostics-rate-response-and-burst-response)
 13. [What sets the limits](#13-what-sets-the-limits)
 13b. [Knowing when it will not work](#13b-knowing-when-it-will-not-work)
 14. [Reproducing the numbers](#14-reproducing-the-numbers)
@@ -802,6 +804,267 @@ $i$ is spurious. It is what `min_confidence` filters on (§14b).
 
 ---
 
+## 12c. Efficiency and accuracy on measured data, by surrogate replay
+
+§12b gets as far as *self-consistency*. It cannot get to efficiency, purity or
+timing accuracy, because those need truth and a measured trace has none.
+
+`qpd.reconstruction.benchmark` closes that gap by turning the forward model
+around. The reconstruction of a real trace already produces a complete fitted
+model — discrimination axis, noise $\sigma$, splitting profile $h(t)$, ramp
+reset schedule, tunnelling rate. That model *is* the measurement's fidelity.
+Push a fresh telegraph trajectory back through it with fresh noise and you get a
+trace the decoder cannot distinguish from the real one, whose flip times are
+known exactly. Reconstruct a batch of those blind, score them (§12), and the
+result is the efficiency and accuracy **of the data you actually took**.
+
+```python
+from qpd.reconstruction import benchmark_reconstruction
+
+report = benchmark_reconstruction(iq, sample_rate=1e5, n_trials=16)
+print(report.summary())
+
+eff, eff_err = report.efficiency     # recall,    mean +/- sd over trials
+pur, pur_err = report.purity         # precision
+rms, _       = report.timing_rms_s
+print(f"true rate ~ {report.corrected_rate_hz:.1f} Hz per state")
+```
+
+`iq` is the measured trace: complex, or real `(n, 2)` / `(2, n)` I and Q. Fixed
+versus swept $n_g$ is detected automatically (`mode="static"` / `"ramped"` to
+force it), and any reconstruction settings — `ramp_period=`, `min_confidence=`,
+`segment_blocks=` — are passed straight through and **reused on every
+surrogate**, so the benchmark measures the pipeline you will actually run.
+
+### Does it actually predict?
+
+The claim is testable on simulation, where the "measured" trace has truth that
+can be withheld from the benchmark and then compared against. Predicting from a
+*single* trace, versus the ensemble measured over independent real traces:
+
+| scenario | | efficiency | purity |
+|---|---|---|---|
+| fixed bias, $n_g = 0.20$, 2 s | predicted from 1 trace | 0.977 ± 0.077 | 1.000 ± 0.000 |
+| | actual, 16 real traces | 0.975 ± 0.076 | 1.000 ± 0.000 |
+| swept, 500 Hz ramp, 2 s | predicted from 1 trace | 0.984 ± 0.044 | 0.981 ± 0.028 |
+| | actual, 8 real traces | 1.000 ± 0.000 | 0.967 ± 0.041 |
+
+Both the mean and the spread transfer. This is `checks/check_reconstruction_benchmark.py`.
+
+### The rate correction
+
+The decoder misses flips and invents them, and the two do not cancel. Since
+$n_{\text{pred}} \cdot \rho / \epsilon \equiv n_{\text{truth}}$ identically for
+purity $\rho$ and efficiency $\epsilon$, the benchmark's job is exactly to
+supply those two numbers, and `corrected_rate_hz` applies them to the measured
+flip count. Where efficiency is near 1 this changes little; under burst
+crowding, where efficiency falls to 0.59, it is the difference between a rate
+and a number.
+
+### Error bars are conditioned on your trace, so the rate is jittered
+
+The benchmark replays the rate *your trace realised*, which on a short trace is
+an $N$-event estimate — a dozen flips pins the rate only to ~30%, and how often
+two flips crowd into one dwell is very sensitive to it. Each surrogate therefore
+draws its rate from the Poisson posterior $\mathrm{Gamma}(N + \tfrac12, 1/T)$
+rather than pinning it. Without this the report happily prints `1.000 ± 0.000`
+off a nine-flip trace. Pass `rate_jitter=False` to isolate the decoder's own
+scatter at a fixed rate.
+
+### What the surrogate does not carry
+
+The replay is faithful to what the decoder consumes, and no more. Each of these
+makes the benchmark **optimistic**:
+
+* **Noise is white, Gaussian and isotropic** at the fitted $\sigma$. Amplifier
+  drift, $1/f$ gain wander and interference are outside the model.
+* **Only nuisances the pipeline already found are replayed.** A reset comb
+  detected on the measured trace is rebuilt into the surrogate, so
+  rediscovering it *is* tested; a comb the pipeline missed cannot be, and its
+  cost is invisible. `report.fidelity.reset_comb` says which case you are in,
+  and a warning fires when none was found. Offset-charge jumps are replayed
+  already-realigned, so they are not tested at all — also warned.
+* **Tunnelling is a pure telegraph** unless bursts are passed explicitly. Since
+  burst crowding is the dominant efficiency loss when present, pass a
+  `QuasiparticleBurstModel` when the data has bursts — on the reference device
+  it moves efficiency from 0.92 to 0.59 while purity stays at 1.00.
+
+### Two self-checks worth reading
+
+**`closure`** — the surrogates' re-measured contrast over the measured trace's.
+It should be 1; it is the only test that the replay landed at the right
+fidelity. It reads 1.02 at a usable fixed bias and drifts to 1.09 by
+$n_g = 0.22$, where the mixture fit starts overstating the separation and the
+surrogates become easier than the data. Departures beyond 5% raise a warning.
+It is `nan` for a `noise_scale ≠ 1` run by design: the test relies on both
+sides being measured at the same fidelity so the estimator's bias cancels, and
+below a true contrast of ~1 the mixture fit floors out near 0.93 (a surrogate at
+a true 0.59 reads back 0.93), which would report a replay failure that is not
+there — the injected noise itself scales to within 0.3%.
+
+**`degenerate`** — inherited from §13b, and it dominates everything above. On a
+degenerate trace the fitted model is spurious, so the surrogate replays a
+*fiction* which the decoder then reconstructs well: at the parity-blind
+$n_g = 0.25$ the benchmark returns hard $F_1 = 0.65$ on a trace whose real
+output is meaningless. The flag and a warning are carried into the report, and
+`calibrate_rate` refuses to run (the correction diverges — 3.8 kHz "corrected"
+to 8.0 kHz against a true 11 Hz). **Check `report.warnings` before quoting any
+number from a benchmark.**
+
+### How far from the edge is this operating point?
+
+Because every contrast scales as $1/\sigma$, scaling the replayed noise answers
+"what would a better amplifier chain buy?" without retaking data:
+
+```python
+for r in benchmark_vs_noise(iq, 1e5, noise_scales=(0.5, 1.0, 2.0), n_trials=8):
+    print(r.noise_scale, r.hard_f1, r.efficiency)
+```
+
+On the reference fixed bias: hard $F_1$ = 1.000 / 0.955 / 0.808 at contrast
+2.36 / 1.18 / 0.59. The measured trace is characterised once and reused for
+every point, so the sweep costs one reconstruction plus the trials.
+
+---
+
+## 12d. Diagnostics: rate response and burst response
+
+Three questions a detector has to answer about its reconstruction, each a sweep
+over the measured trace's own fidelity. All are driven by one
+`characterize_trace` call, so they describe the readout you have.
+
+```bash
+python checks/study_reconstruction_diagnostics.py          # all three
+python checks/study_reconstruction_diagnostics.py burst    # just the burst pair
+```
+
+**These are for a constant bias.** Everything below is run and validated on a
+fixed-$n_g$ trace ($n_g = 0$, the best-contrast bias), which is the operating
+point these diagnostics target. The sweeps do not refuse a swept-$n_g$
+fidelity, but nothing here has been checked against one, and two things would
+change: the contrast is no longer a single number (§12b), and the surrogate
+carries a replayed reset comb whose rediscovery is retested at every rate.
+Treat a ramped result from §12d as unvalidated.
+
+One consequence worth stating, because it was a real bug: on a fixed bias the
+telegraph's own Lorentzian spectrum peaks at the bottom of the fold-period
+search band, and taken at face value it makes a constant-$n_g$ trace look
+swept. `characterize_trace(mode="auto")` therefore requires the trace to hold
+at least 50 fold cycles before calling it ramped — a real sweep packs thousands
+— and a constant bias now stays `mode="static"`. Pass `mode="static"`
+explicitly if you want to remove the question entirely; that is always the
+safer choice when you know how the measurement was driven.
+
+### How fast can the background tunnel before flips are lost?
+
+The background is Poisson, so the rate alone sets how often two tunnels land
+closer than the decoder can resolve — and an unresolved pair is **invisible,
+not merely mistimed**, because two toggles return the parity to where it
+started. Efficiency therefore falls with rate no matter how good the contrast
+is.
+
+```python
+from qpd.reconstruction import characterize_trace, sweep_rate, plot_efficiency_vs_rate
+
+fid = characterize_trace(iq, 1e5)
+reports = sweep_rate(fid, [1, 3, 10, 30, 100, 300, 1e3, 3e3, 1e4, 3e4])
+plot_efficiency_vs_rate(reports)
+```
+
+![Flip efficiency vs background rate](figures/efficiency_vs_rate.png)
+
+The rate is *pinned* rather than jittered here — it is the independent
+variable, so the measured trace's counting uncertainty has no business in it.
+
+Two things to read off this curve.
+
+**Crowding costs recall before precision.** Both numbers come from the same
+one-to-one matching of predicted flip times to true ones: recall (efficiency)
+is matched/true, purity is matched/predicted. They separate because parity is
+only observable as a *change* — when two tunnels land closer than the decoder
+can resolve, the parity returns to where it started and the trace shows no
+transition at all. That deletes two true events while producing *zero* spurious
+predictions. So the shape is diagnostic: recall falling with purity intact means
+crowding, whereas purity falling too means the decoder is segmenting noise and
+inventing transitions (the degenerate case of §13b).
+
+**The matching tolerance shrinks with the dwell**, and the figure does not say
+so — each point carries its own value in `report.tol`. A fixed 0.5 ms window is
+meaningless once flips arrive every 33 µs (it would credit a prediction fifteen
+dwells away as a match), and a tolerance wider than the mean gap also fuses the
+whole trace into one connected component of the matching graph, where the
+grader's assignment step goes quadratic on $10^5$ events and effectively hangs.
+`sweep_rate` therefore uses $\min(0.5\ \text{ms},\ 0.25/\Gamma)$.
+
+Up to 10 kHz this changes nothing — scoring the same traces at a generous fixed
+50 µs gives identical efficiency and purity. Only the 30 kHz point is affected,
+where the tolerance (8.3 µs) falls *below* the 10 µs sample period, so a flip
+found in the right sample but timed one sample out fails to match:
+
+| | adaptive (plotted) | generous 50 µs |
+|---|---|---|
+| efficiency | 0.699 | 0.724 |
+| purity | 0.952 | 0.986 |
+
+The collapse at 30 kHz is real; the plotted point overstates it by about
+2.5 points of recall. Pass `adaptive_tol=False` with an explicit `tol=` to score
+every rate at one fixed window, and keep the rates low enough that it stays
+meaningful.
+
+### How big must a burst be before it is found at all?
+
+This is a different question from §12c, which scores individual flips. Here the
+object is the **burst** — the energy deposition — and the question is whether it
+is distinguishable from a background coincidence.
+`qpd.reconstruction.detect_bursts` clusters the reconstructed flip train and
+tests each cluster against the Poisson background with a trials-corrected scan
+statistic:
+
+$$p = \min\left(1,\ \frac{D}{T}\, P\big[\mathrm{Poisson}(\lambda T) \ge m\big]\right)$$
+
+for $m$ flips spanning $T$ in a trace of duration $D$. The $D/T$ trials factor
+is not optional: the cluster was *selected* for being dense, so the raw Poisson
+tail is not a false-alarm rate. Measured false-burst rate on pure background:
+**< 0.01 per 5 s trace**, and rate-invariant from 5 Hz to 500 Hz.
+
+```python
+from qpd.reconstruction import (benchmark_reconstruction, sweep_burst_size,
+                                plot_burst_efficiency, plot_burst_multiplicity)
+
+# take the background rate from the data, de-biased
+bg = benchmark_reconstruction(fidelity=fid, n_trials=8).corrected_rate_hz
+points = sweep_burst_size(fid, [2, 3, 5, 8, 12, 20, 30, 50, 80], background_rate_hz=bg)
+plot_burst_efficiency(points)
+```
+
+![Burst detection efficiency vs multiplicity](figures/burst_efficiency.png)
+
+**Get the background rate from the data**, not from an assumption: too low a
+value manufactures bursts out of background pairs, too high dissolves the small
+ones. `corrected_rate_hz` (§12c) is the right input — the decoded rate
+de-biased by the reconstruction's own efficiency and purity.
+
+### Once found, how many of its quasiparticles are counted?
+
+Not all of them, and the shortfall grows with burst size. A large burst crowds
+its tunnels into a few milliseconds; the pairs that fall within a sample cancel
+in the parity and are never seen. So the recovered multiplicity **saturates**:
+
+![Burst multiplicity, truth vs reconstruction](figures/burst_multiplicity.png)
+
+This is a property of parity readout, not of the clustering, and it is the plot
+that says how far a quoted multiplicity can be trusted. Two readings:
+
+* **Above ~20 quasiparticles the count is a lower bound**, not a measurement.
+  Correcting it needs this curve.
+* **The low-multiplicity end is a selected sample.** Only detected bursts have
+  a measured multiplicity, and a 2-quasiparticle burst is generally found only
+  when it fluctuated upward — so those points sit above an unbiased sample.
+  The saturation at the high end is the real effect; the small positive bias at
+  the low end is selection plus a little background swept into the cluster.
+
+---
+
 ## 13. What sets the limits
 
 **(a) Contrast.** Everything is governed by $C = |h|/\sigma$. Measured on the
@@ -910,9 +1173,15 @@ than being left to inspection.
 # regression gate (55 checks, ~5 min)
 python checks/check_parity_reconstruction.py
 
+# surrogate-replay benchmarking gate (71 checks, ~6 min) -- §12c
+python checks/check_reconstruction_benchmark.py
+
 # performance studies: rate / noise / burst-crowding / device sweeps
 python checks/study_parity_reconstruction.py            # all
 python checks/study_parity_reconstruction.py noise      # one
+
+# diagnostic figures for a measured trace -- §12d
+python checks/study_reconstruction_diagnostics.py
 ```
 
 A worked end-to-end demonstration, with the learned branch means overlaid on the
@@ -930,6 +1199,19 @@ rec.reset_comb          # the ramp-reset schedule it found
 rec.charge_jump_times   # jumps found and corrected as nuisances
 
 score_flips(result.flip_times, rec.flip_times)   # efficiency, purity, F1, rms
+```
+
+On *measured* data there is no `result.flip_times` to score against, so
+`score_flips` is unavailable and §12c takes its place:
+
+```python
+from qpd.reconstruction import benchmark_reconstruction
+
+report = benchmark_reconstruction(iq, sample_rate=1e5, n_trials=16)
+print(report.summary())
+report.efficiency, report.purity, report.timing_rms_s   # each (mean, sd)
+report.corrected_rate_hz                                # de-biased flip rate
+report.warnings                                         # read these first
 ```
 
 ---

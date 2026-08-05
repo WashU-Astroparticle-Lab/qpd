@@ -32,6 +32,29 @@ from qpd.reconstruction.analysis import (
     score_flips,
     window_report,
 )
+from qpd.reconstruction.benchmark import (
+    BenchmarkReport,
+    BenchmarkTrial,
+    BurstSizePoint,
+    TraceFidelity,
+    as_complex_trace,
+    benchmark_reconstruction,
+    benchmark_vs_noise,
+    characterize_trace,
+    sweep_burst_size,
+    sweep_rate,
+)
+from qpd.reconstruction.benchmark_plots import (
+    plot_burst_efficiency,
+    plot_burst_multiplicity,
+    plot_efficiency_vs_rate,
+)
+from qpd.reconstruction.bursts import (
+    BurstMatch,
+    DetectedBurst,
+    detect_bursts,
+    match_bursts,
+)
 from qpd.reconstruction.emission import (
     EmissionModel,
     estimate_direction,
@@ -92,4 +115,23 @@ __all__ = [
     "score_flips",
     "window_report",
     "burst_report",
+    # benchmarking a measured trace
+    "characterize_trace",
+    "TraceFidelity",
+    "benchmark_reconstruction",
+    "benchmark_vs_noise",
+    "BenchmarkReport",
+    "BenchmarkTrial",
+    "as_complex_trace",
+    # burst finding and burst-level diagnostics
+    "detect_bursts",
+    "match_bursts",
+    "DetectedBurst",
+    "BurstMatch",
+    "sweep_rate",
+    "sweep_burst_size",
+    "BurstSizePoint",
+    "plot_efficiency_vs_rate",
+    "plot_burst_efficiency",
+    "plot_burst_multiplicity",
 ]
