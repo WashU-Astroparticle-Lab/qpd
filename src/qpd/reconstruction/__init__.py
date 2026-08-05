@@ -32,6 +32,15 @@ from qpd.reconstruction.analysis import (
     score_flips,
     window_report,
 )
+from qpd.reconstruction.benchmark import (
+    BenchmarkReport,
+    BenchmarkTrial,
+    TraceFidelity,
+    as_complex_trace,
+    benchmark_reconstruction,
+    benchmark_vs_noise,
+    characterize_trace,
+)
 from qpd.reconstruction.emission import (
     EmissionModel,
     estimate_direction,
@@ -92,4 +101,12 @@ __all__ = [
     "score_flips",
     "window_report",
     "burst_report",
+    # benchmarking a measured trace
+    "characterize_trace",
+    "TraceFidelity",
+    "benchmark_reconstruction",
+    "benchmark_vs_noise",
+    "BenchmarkReport",
+    "BenchmarkTrial",
+    "as_complex_trace",
 ]
