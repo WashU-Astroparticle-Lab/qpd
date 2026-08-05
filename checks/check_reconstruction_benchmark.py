@@ -27,6 +27,11 @@ Covers:
   9. Bursts crowd flips and cost efficiency, not purity.
  10. API guards: surrogates cannot outrun the fitted model; settings cannot be
      silently ignored.
+ 11. The burst finder: false-burst rate on pure background (and its
+     rate-invariance), and real bursts recovered.
+ 12. The rate and burst-size sweeps, including the multiplicity saturation that
+     is the whole point of the burst study.
+ 13. The three diagnostic figures render.
 """
 import sys
 from pathlib import Path
@@ -40,12 +45,17 @@ from reconstruction_scenarios import (build_scenario,  # noqa: E402
                                       build_static_scenario)
 
 from qpd.simulator import QuasiparticleBurstModel  # noqa: E402
+from qpd.simulator.parity import generate_parity_trajectory  # noqa: E402
 from qpd.reconstruction.emission import estimate_direction  # noqa: E402
 from qpd.reconstruction import (as_complex_trace,  # noqa: E402
                                 benchmark_reconstruction, benchmark_vs_noise,
-                                characterize_trace,
+                                characterize_trace, detect_bursts,
+                                match_bursts, plot_burst_efficiency,
+                                plot_burst_multiplicity,
+                                plot_efficiency_vs_rate,
                                 reconstruct_parity_flips_ramped,
-                                reconstruct_parity_flips_static, score_flips)
+                                reconstruct_parity_flips_static, score_flips,
+                                sweep_burst_size, sweep_rate)
 
 SR = 1e5
 _failures = []
@@ -119,6 +129,20 @@ def main() -> int:
     check("decoded rate matches the trace's realised rate within 20%",
           abs(fid.rate_hz / rate_true - 1) < 0.20,
           f"decoded {fid.rate_hz:.2f} Hz vs realised {rate_true:.2f} Hz")
+
+    # Regression: a fixed bias must not be auto-detected as swept. The
+    # telegraph's own Lorentzian spectrum peaks at the bottom of the period
+    # search band, and on a longer trace it is reported as a highly significant
+    # period of order the trace length. Following it sends the trace down the
+    # ramped pipeline, which models telegraph noise as a ramp and inflates the
+    # decoded rate several-fold -- silently. 5 s is where this first bit.
+    for ng in (0.0, 0.10, 0.20):
+        for dur in (2.0, 5.0):
+            f = characterize_trace(
+                build_static_scenario(n_g=ng, duration=dur).simulate(seed=1).iq,
+                SR)
+            check(f"fixed bias n_g={ng} over {dur:.0f} s stays static",
+                  f.mode == "static", f"mode={f.mode}, rate={f.rate_hz:.1f} Hz")
 
     scn_r = build_scenario(duration=2.0, burst_rate_hz=0.0)
     fid_r = characterize_trace(scn_r.simulate(seed=2).iq, SR)
@@ -319,6 +343,100 @@ def main() -> int:
           characterize_trace(truth_trace.iq, SR,
                              min_confidence=0.2).recon_kwargs
           == {"min_confidence": 0.2})
+
+    # --- 11. burst finder ---------------------------------------------------
+    print("\n11. Burst finder on a flip train")
+    # The number that matters: how often pure background fakes a burst. It must
+    # also be rate-invariant, since the linking distance scales with the rate.
+    for rate in (5.0, 50.0, 500.0):
+        n_false, n_tr, D = 0, 120, 5.0
+        for s in range(n_tr):
+            r = np.random.default_rng(s)
+            t = np.sort(r.uniform(0.0, D, r.poisson(rate * D)))
+            n_false += len(detect_bursts(t, rate, duration=D))
+        check(f"false bursts on pure {rate:.0f} Hz background stay rare",
+              n_false / n_tr < 0.05, f"{n_false / n_tr:.3f} per {D:.0f} s trace")
+
+    # And that it finds real ones. On a truth train (no reconstruction), a
+    # 20-quasiparticle burst is unmistakable.
+    D, rate = 5.0, 10.0
+    grid = np.arange(int(D * SR)) / SR
+    found, total = 0, 0
+    for s in range(8):
+        r = np.random.default_rng(4000 + s)
+        bm = QuasiparticleBurstModel(times=np.arange(0.5, D - 0.5, 0.5),
+                                     tau=3.7e-3, mu=1.2e-3, sigma=0.4e-3,
+                                     expected_n_qp=20.0)
+        ev, bt = bm.sample(r)
+        _, flips = generate_parity_trajectory(grid, rate, rate, r,
+                                              extra_flip_times=ev,
+                                              return_flip_times=True)
+        for m in match_bursts(bt, detect_bursts(flips, rate, duration=D)):
+            total += 1
+            found += m.detected
+    check("20-qp bursts are found on a truth train",
+          found / total > 0.95, f"{found}/{total}")
+    check("match_bursts drops empty (n_qp = 0) truth bursts",
+          all(m.n_qp_true > 0 for m in match_bursts(
+              [type("B", (), {"n_qp": 0, "t_start": 0.0, "t_end": 0.1})()],
+              [])) is True)
+    check("a zero background rate is rejected, not silently allowed",
+          raises(detect_bursts, np.array([0.0, 0.001, 0.002]), 0.0))
+    check("min_flips below 2 is rejected",
+          raises(detect_bursts, np.array([0.0, 0.001]), 10.0, min_flips=1))
+
+    # --- 12. sweeps ---------------------------------------------------------
+    print("\n12. Rate and burst-size sweeps")
+    fid5 = characterize_trace(
+        build_static_scenario(n_g=0.0, duration=5.0).simulate(seed=1).iq, SR)
+    reports = sweep_rate(fid5, [10.0, 1e3, 1e4], n_trials=3)
+    effs = [r.efficiency[0] for r in reports]
+    print("     rate 10 / 1k / 10k Hz -> efficiency "
+          + " / ".join(f"{e:.3f}" for e in effs))
+    check("flip efficiency does not increase with background rate",
+          effs[0] >= effs[1] - 0.02 and effs[1] >= effs[2] - 0.02,
+          " > ".join(f"{e:.3f}" for e in effs))
+    check("crowding costs recall before precision",
+          reports[-1].purity[0] > reports[-1].efficiency[0] - 1e-9,
+          f"purity {reports[-1].purity[0]:.3f} vs "
+          f"efficiency {reports[-1].efficiency[0]:.3f}")
+    check("the rate is pinned, not jittered, across a rate sweep",
+          all(not r.rate_jitter for r in reports))
+
+    pts = sweep_burst_size(fid5, [3, 8, 30, 80], n_trials=3)
+    print("     n_qp 3 / 8 / 30 / 80 -> burst efficiency "
+          + " / ".join(f"{p.efficiency:.2f}" for p in pts)
+          + "  bias " + " / ".join(f"{p.bias:+.1f}" for p in pts))
+    check("burst detection efficiency rises with multiplicity",
+          pts[0].efficiency < pts[1].efficiency <= pts[2].efficiency,
+          " < ".join(f"{p.efficiency:.3f}" for p in pts[:3]))
+    check("large bursts are always found",
+          pts[-1].efficiency > 0.95, f"{pts[-1].efficiency:.3f}")
+    # The physics this whole study exists to expose: unresolved pairs cancel in
+    # the parity, so recovered multiplicity falls progressively short.
+    check("multiplicity saturates -- big bursts are under-counted",
+          pts[-1].bias < -3.0, f"bias {pts[-1].bias:+.1f} at n_qp = 80")
+    check("small bursts are not under-counted the same way",
+          pts[0].bias > pts[-1].bias, f"{pts[0].bias:+.1f} vs {pts[-1].bias:+.1f}")
+    check("the burst study runs at the background rate it was given",
+          all(abs(p.background_rate_hz - fid5.rate_hz) < 1e-9 for p in pts))
+
+    # --- 13. diagnostic plots ----------------------------------------------
+    print("\n13. Diagnostic plots render")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    try:
+        f1, _ = plot_efficiency_vs_rate(reports)
+        f2, _ = plot_burst_efficiency(pts)
+        f3, _ = plot_burst_multiplicity(pts)
+        check("all three diagnostic figures render",
+              all(f is not None for f in (f1, f2, f3)))
+        plt.close("all")
+    except Exception as exc:  # noqa: BLE001
+        check("all three diagnostic figures render", False, repr(exc))
+    check("an empty sweep is rejected rather than plotted",
+          raises(plot_efficiency_vs_rate, []))
 
     print()
     if _failures:

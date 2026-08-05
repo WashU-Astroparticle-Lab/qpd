@@ -83,6 +83,33 @@ reconstructs well.
 [`docs/reconstruction.md`](docs/reconstruction.md) §12c has the method and the
 evidence that it predicts.
 
+### Rate response and burst response
+
+Three diagnostics, all driven by the fidelity of the same measured trace.
+
+```python
+from qpd.reconstruction import (characterize_trace, sweep_rate, sweep_burst_size,
+                                plot_efficiency_vs_rate, plot_burst_efficiency,
+                                plot_burst_multiplicity)
+
+fid = characterize_trace(iq, 1e5)
+
+# 1. flip efficiency vs Poisson background rate
+plot_efficiency_vs_rate(sweep_rate(fid, [1, 10, 100, 1e3, 1e4]))
+
+# 2, 3. burst-LEVEL detection efficiency and multiplicity bias vs burst size,
+#       at the background rate measured from the data
+points = sweep_burst_size(fid, [2, 3, 5, 8, 12, 20, 50], background_rate_hz=bg)
+plot_burst_efficiency(points)
+plot_burst_multiplicity(points)
+```
+
+`detect_bursts` clusters a reconstructed flip train against the Poisson
+background with a trials-corrected scan statistic (measured false-burst rate
+< 0.01 per 5 s trace). Note that recovered burst multiplicity **saturates** —
+crowded tunnels cancel in pairs — so a large burst's quoted count is a lower
+bound. [`docs/reconstruction.md`](docs/reconstruction.md) §12d has the figures.
+
 ## Verification
 
 ```bash
@@ -90,6 +117,7 @@ python checks/check_parity_reconstruction.py     # reconstruction regression gat
 python checks/check_reconstruction_benchmark.py  # surrogate-replay benchmark gate
 python checks/check_readout_window.py            # dressed-S21 + lock-in window
 python checks/study_parity_reconstruction.py     # rate / noise / burst / device sweeps
+python checks/study_reconstruction_diagnostics.py  # the three figures above
 ```
 
 ## Notebooks

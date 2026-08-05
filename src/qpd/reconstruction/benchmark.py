@@ -69,6 +69,7 @@ import numpy as np
 from qpd.simulator.parity import EVEN, generate_parity_trajectory
 
 from .analysis import DEFAULT_SCALE, DEFAULT_TOL, FlipScore, score_flips
+from .bursts import detect_bursts, match_bursts
 from .emission import EmissionModel, learn_emission_model, validate_trace
 from .reconstruct import reconstruct_parity_flips_ramped
 from .static_bias import StaticBlobModel, reconstruct_parity_flips_static
@@ -81,6 +82,9 @@ __all__ = [
     "BenchmarkReport",
     "benchmark_reconstruction",
     "benchmark_vs_noise",
+    "sweep_rate",
+    "sweep_burst_size",
+    "BurstSizePoint",
 ]
 
 # Fractional departure of `BenchmarkReport.closure` from 1 that earns a warning.
@@ -172,7 +176,8 @@ class TraceFidelity:
         rate_hz: float | None = None,
         noise_scale: float = 1.0,
         bursts=None,
-    ) -> tuple[np.ndarray, np.ndarray]:
+        return_bursts: bool = False,
+    ):
         """Draw one surrogate trace carrying this fidelity, with known truth.
 
         A fresh telegraph trajectory is pushed through the *fitted* emission
@@ -205,12 +210,17 @@ class TraceFidelity:
             Superimpose quasiparticle bursts on the background telegraph. Pass
             one when the measured data contains bursts -- crowded flips are the
             dominant efficiency loss and the plain telegraph will not show it.
+        return_bursts : bool
+            Also return the per-burst :class:`~qpd.simulator.BurstTruth`
+            records, which carry each burst's true multiplicity and extent --
+            the truth a burst-level study is scored against.
 
         Returns
         -------
         (iq, flip_times) : tuple of arrays
             The surrogate trace, and the exact sub-sample truth flip times on
             the same time axis as the measured trace (offset by ``t0``).
+            With ``return_bursts=True``, ``(iq, flip_times, burst_truth)``.
         """
         if self.model is None:
             raise ValueError("no fitted model to replay")
@@ -225,9 +235,9 @@ class TraceFidelity:
         if not np.isfinite(rate) or rate < 0:
             raise ValueError(f"rate_hz must be finite and non-negative; got {rate}")
 
-        extra = None
+        extra, burst_truth = None, []
         if bursts is not None:
-            extra, _ = bursts.sample(rng)
+            extra, burst_truth = bursts.sample(rng)
         parity, flips = generate_parity_trajectory(
             t, rate, rate, rng, extra_flip_times=extra, return_flip_times=True)
 
@@ -237,6 +247,8 @@ class TraceFidelity:
         sigma = float(self.sigma) * float(noise_scale)
         noise = rng.normal(0.0, sigma, n) + 1j * rng.normal(0.0, sigma, n)
         iq = self.model.origin + self.model.direction * (x + noise)
+        if return_bursts:
+            return iq, flips + self.t0, burst_truth
         return iq, flips + self.t0
 
     def describe(self) -> str:
@@ -272,6 +284,7 @@ def characterize_trace(
     *,
     mode: str = "auto",
     t0: float = 0.0,
+    min_ramp_cycles: float = 50.0,
     **recon_kwargs,
 ) -> TraceFidelity:
     """Fit the measured trace and package what sets the reconstruction's fidelity.
@@ -289,12 +302,19 @@ def characterize_trace(
     sample_rate : float
         Sampling rate [Hz].
     mode : {"auto", "static", "ramped"}
-        Which entry point applies. ``"auto"`` decides by asking whether the
-        trace carries a periodic branch-splitting envelope: a swept ``n_g``
-        does, a fixed one does not. Override it when you know how the
-        measurement was driven.
+        Which entry point applies. ``"auto"`` decides by how many fold cycles
+        the trace holds (see ``min_ramp_cycles``). Override it when you know
+        how the measurement was driven -- that is always the safer choice.
     t0 : float
         Time of the first sample [s].
+    min_ramp_cycles : float
+        Fold cycles the trace must contain before ``mode="auto"`` calls it
+        swept. The presence of a spectral peak is *not* sufficient: a fixed
+        bias produces one at the search band's lower edge from the telegraph's
+        own Lorentzian spectrum, and following it sends the trace down the
+        ramped pipeline and inflates the decoded rate several-fold. A real
+        sweep packs thousands of cycles into a trace, so this threshold sits
+        two orders of magnitude clear of both cases.
     **recon_kwargs
         Passed to the reconstruction, and *reused unchanged on every surrogate*
         so the benchmark measures the settings you will actually run. E.g.
@@ -304,8 +324,24 @@ def characterize_trace(
     dt = 1.0 / float(sample_rate)
 
     if mode == "auto":
+        # A spectral peak alone does NOT mean the bias was swept. The telegraph
+        # itself has a Lorentzian spectrum whose in-band maximum sits at the
+        # bottom edge of the period search, and on a fixed-bias trace that is
+        # reported as a highly "significant" period of order the trace length
+        # (measured: 0.87 s on a 5 s trace, prominence 118). Taking it at face
+        # value sends a fixed-bias trace down the ramped pipeline, which then
+        # models telegraph noise as a ramp and returns a rate several times too
+        # high -- silently.
+        #
+        # A real n_g sweep is distinguished by *how many* fold cycles it packs
+        # into the trace: thousands (27,500 at the reference 500 Hz ramp, 2,750
+        # at 50 Hz), against the ~5 the search band's lower edge allows. The
+        # cycle count separates the two by two orders of magnitude either side
+        # of this threshold.
         probe = learn_emission_model(iq, dt)
-        mode = "static" if probe.fold_period is None else "ramped"
+        cycles = (iq.size * dt / probe.fold_period
+                  if probe.fold_period else 0.0)
+        mode = "ramped" if cycles >= float(min_ramp_cycles) else "static"
     if mode not in ("static", "ramped"):
         raise ValueError(f"mode must be 'auto', 'static' or 'ramped'; got {mode!r}")
 
@@ -778,6 +814,234 @@ def benchmark_vs_noise(
     return [benchmark_reconstruction(fidelity=fidelity, noise_scale=float(s),
                                      **kwargs)
             for s in noise_scales]
+
+
+def sweep_rate(
+    fidelity: TraceFidelity,
+    rates_hz,
+    *,
+    n_trials: int = 6,
+    seed: int = 0,
+    adaptive_tol: bool = True,
+    tol_dwell_fraction: float = 0.25,
+    **kwargs,
+) -> list[BenchmarkReport]:
+    """Benchmark the same measurement across background tunnelling rates.
+
+    The background is a Poisson process, so the rate alone decides how often
+    two tunnels land close enough to be unresolvable -- and a pair separated by
+    less than the decoder can resolve is not merely mistimed, it is *invisible*
+    (two toggles return the parity to where it started). Efficiency therefore
+    falls with rate no matter how good the readout is, and this maps out where.
+
+    The rate is pinned rather than jittered here: it is the independent
+    variable, so the counting uncertainty of the measured trace has no place in
+    it. Everything else -- contrast, noise, ramp structure -- stays at the
+    measured trace's fidelity.
+
+    Parameters
+    ----------
+    adaptive_tol : bool
+        Shrink the matching tolerance in step with the rate, to
+        ``tol_dwell_fraction / rate``, never above the grader's default. This
+        is on by default for two reasons that arrive together. Physically, a
+        fixed 0.5 ms tolerance is nonsense once flips arrive every 33 us -- it
+        would credit a prediction that is fifteen dwells away as a match.
+        Computationally, a tolerance wider than the mean gap fuses the whole
+        trace into one connected component of the matching graph, and the
+        grader's assignment step goes quadratic on ~10^5 events and effectively
+        hangs. Set False only when comparing rates at a genuinely fixed
+        tolerance, and then keep the rates low.
+    tol_dwell_fraction : float
+        Fraction of the mean dwell used as the tolerance when ``adaptive_tol``.
+
+    Returns
+    -------
+    list of BenchmarkReport, one per rate. Each carries the tolerance it was
+    scored at in :attr:`BenchmarkReport.tol`.
+    """
+    kwargs.setdefault("rate_jitter", False)
+    base_tol = kwargs.pop("tol", DEFAULT_TOL)
+    # Popped once, outside the loop: popping inside would apply a caller's
+    # scale to the first rate only and silently fall back for the rest.
+    user_scale = kwargs.pop("scale", None)
+    out = []
+    for r in np.asarray(rates_hz, dtype=float):
+        tol = base_tol
+        if adaptive_tol and r > 0:
+            tol = min(base_tol, float(tol_dwell_fraction) / float(r))
+        out.append(benchmark_reconstruction(
+            fidelity=fidelity, rate_hz=float(r), n_trials=n_trials, seed=seed,
+            tol=tol, scale=(tol / 2.0 if user_scale is None else user_scale),
+            **kwargs))
+    return out
+
+
+@dataclass
+class BurstSizePoint:
+    """Burst-level performance at one expected quasiparticle multiplicity."""
+
+    n_qp_expected: float  # Poisson mean the bursts were drawn at
+    n_bursts: int  # truth bursts that actually injected >= 1 quasiparticle
+    n_detected: int
+    n_qp_true: np.ndarray  # per matched burst
+    n_qp_detected: np.ndarray  # per matched burst
+    background_rate_hz: float = float("nan")
+
+    @property
+    def efficiency(self) -> float:
+        """Fraction of true bursts found -- burst-level, not flip-level."""
+        return self.n_detected / self.n_bursts if self.n_bursts else np.nan
+
+    @property
+    def efficiency_err(self) -> float:
+        """Binomial standard error on :attr:`efficiency`."""
+        n = self.n_bursts
+        if not n:
+            return float("nan")
+        p = self.n_detected / n
+        return float(np.sqrt(max(p * (1 - p), 0.0) / n))
+
+    @property
+    def mean_n_qp_true(self) -> float:
+        return float(np.mean(self.n_qp_true)) if self.n_qp_true.size else np.nan
+
+    @property
+    def mean_n_qp_detected(self) -> float:
+        return (float(np.mean(self.n_qp_detected))
+                if self.n_qp_detected.size else np.nan)
+
+    @property
+    def bias(self) -> float:
+        """Mean detected minus true multiplicity, over *detected* bursts."""
+        if not self.n_qp_true.size:
+            return float("nan")
+        return float(np.mean(self.n_qp_detected - self.n_qp_true))
+
+    @property
+    def bias_err(self) -> float:
+        if self.n_qp_true.size < 2:
+            return float("nan")
+        d = self.n_qp_detected - self.n_qp_true
+        return float(np.std(d, ddof=1) / np.sqrt(d.size))
+
+
+def sweep_burst_size(
+    fidelity: TraceFidelity,
+    n_qp_values,
+    *,
+    background_rate_hz: float | None = None,
+    n_trials: int = 6,
+    seed: int = 0,
+    burst_spacing: float = 0.25,
+    burst_tau: float = 3.7e-3,
+    burst_mu: float = 1.2e-3,
+    burst_sigma: float = 0.4e-3,
+    trial_samples: int | None = None,
+    detect_kwargs: dict | None = None,
+) -> list[BurstSizePoint]:
+    """Burst-level detection efficiency and multiplicity bias vs burst size.
+
+    This asks a different question from :func:`benchmark_reconstruction`, which
+    scores individual flips. Here the object is the *burst*: was the energy
+    deposition found at all, and once found, how many of its quasiparticles
+    were counted? For a detector those are the numbers that matter.
+
+    At each requested multiplicity, bursts are injected at regular intervals on
+    top of the measured trace's background, the surrogate is reconstructed
+    blind, :func:`~qpd.reconstruction.bursts.detect_bursts` clusters the
+    recovered flips, and the clusters are matched to truth.
+
+    Expect two distinct effects, and read them from the two outputs:
+
+    * **Efficiency turns on** with multiplicity -- a 2-3 quasiparticle burst is
+      not statistically distinguishable from a background coincidence, while a
+      large one is unmistakable.
+    * **Multiplicity saturates.** A big burst crowds its tunnels into a few
+      milliseconds, unresolved pairs cancel in the parity, and the recovered
+      count falls progressively short of the truth. The bias is what
+      :attr:`BurstSizePoint.bias` and the ``n_qp_true`` / ``n_qp_detected``
+      pairs record, and it is a property of parity readout rather than of the
+      clustering.
+
+    Parameters
+    ----------
+    fidelity : TraceFidelity
+        From :func:`characterize_trace` -- the measured trace's fidelity.
+    n_qp_values : sequence of float
+        Expected quasiparticle counts (Poisson means) to sweep.
+    background_rate_hz : float, optional
+        Background tunnelling rate to inject, and the rate the burst finder is
+        told to test against. Defaults to the rate decoded from the measured
+        trace; pass :attr:`BenchmarkReport.corrected_rate_hz` to use the
+        de-biased value instead. Getting this from the data matters -- too low
+        a value manufactures bursts from background pairs, too high dissolves
+        the small ones.
+    n_trials : int
+        Surrogate traces per multiplicity. Bursts accumulate across trials, so
+        the burst count backing each efficiency is ``n_trials`` times the
+        number that fit in one trace.
+    burst_spacing : float
+        Interval between injected bursts [s]. Must stay well above the burst
+        duration (~12 ms on the reference device) so they do not merge.
+    burst_tau, burst_mu, burst_sigma : float
+        EMG shape of the burst arrival profile; defaults are the reference
+        device's.
+    detect_kwargs : dict, optional
+        Passed to :func:`~qpd.reconstruction.bursts.detect_bursts`, e.g.
+        ``{"min_flips": 4}`` to trade efficiency for a lower false-burst rate.
+
+    Returns
+    -------
+    list of BurstSizePoint, one per entry of ``n_qp_values``.
+    """
+    from qpd.simulator import QuasiparticleBurstModel
+
+    rate = float(fidelity.rate_hz if background_rate_hz is None
+                 else background_rate_hz)
+    n = int(fidelity.n_samples if trial_samples is None else trial_samples)
+    if n > fidelity.n_samples:
+        raise ValueError(
+            f"trial_samples={n} exceeds the measured length "
+            f"{fidelity.n_samples}")
+    duration = n / fidelity.sample_rate
+    if burst_spacing <= 0:
+        raise ValueError("burst_spacing must be positive")
+    # Keep a spacing clear of the trace edges so no burst is truncated.
+    onsets = np.arange(burst_spacing, duration - burst_spacing, burst_spacing)
+    if onsets.size == 0:
+        raise ValueError(
+            f"no burst fits in a {duration:.4g} s trace at "
+            f"burst_spacing={burst_spacing:.4g} s")
+    dk = dict(detect_kwargs or {})
+
+    out: list[BurstSizePoint] = []
+    for lam in np.asarray(n_qp_values, dtype=float):
+        model = QuasiparticleBurstModel(
+            times=onsets, tau=burst_tau, mu=burst_mu, sigma=burst_sigma,
+            expected_n_qp=float(lam))
+        n_true = n_det = 0
+        tr, de = [], []
+        for k in range(int(n_trials)):
+            sim_iq, _, truth = fidelity.synthesize(
+                seed=int(seed) + k, n_samples=n, rate_hz=rate,
+                bursts=model, return_bursts=True)
+            rec = _reconstruct(sim_iq, fidelity)
+            found = detect_bursts(rec.flip_times - fidelity.t0, rate,
+                                  duration=duration, **dk)
+            for m in match_bursts(truth, found):
+                n_true += 1
+                if m.detected:
+                    n_det += 1
+                    tr.append(m.n_qp_true)
+                    de.append(m.n_qp_detected)
+        out.append(BurstSizePoint(
+            n_qp_expected=float(lam), n_bursts=n_true, n_detected=n_det,
+            n_qp_true=np.asarray(tr, dtype=float),
+            n_qp_detected=np.asarray(de, dtype=float),
+            background_rate_hz=rate,
+        ))
+    return out
 
 
 # Keys that belong to the reconstruction rather than to the benchmark loop;

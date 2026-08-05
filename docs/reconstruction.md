@@ -31,6 +31,7 @@ the statistical machinery is built up from scratch in [§5](#5-the-hidden-markov
 12. [Scoring against truth](#12-scoring-against-truth)
 12b. [How good is it? Fidelity without truth](#12b-how-good-is-it-fidelity-without-truth)
 12c. [Efficiency and accuracy on measured data, by surrogate replay](#12c-efficiency-and-accuracy-on-measured-data-by-surrogate-replay)
+12d. [Diagnostics: rate response and burst response](#12d-diagnostics-rate-response-and-burst-response)
 13. [What sets the limits](#13-what-sets-the-limits)
 13b. [Knowing when it will not work](#13b-knowing-when-it-will-not-work)
 14. [Reproducing the numbers](#14-reproducing-the-numbers)
@@ -926,6 +927,95 @@ every point, so the sweep costs one reconstruction plus the trials.
 
 ---
 
+## 12d. Diagnostics: rate response and burst response
+
+Three questions a detector has to answer about its reconstruction, each a sweep
+over the measured trace's own fidelity. All are driven by one
+`characterize_trace` call, so they describe the readout you have.
+
+```bash
+python checks/study_reconstruction_diagnostics.py          # all three
+python checks/study_reconstruction_diagnostics.py burst    # just the burst pair
+```
+
+### How fast can the background tunnel before flips are lost?
+
+The background is Poisson, so the rate alone sets how often two tunnels land
+closer than the decoder can resolve — and an unresolved pair is **invisible,
+not merely mistimed**, because two toggles return the parity to where it
+started. Efficiency therefore falls with rate no matter how good the contrast
+is.
+
+```python
+from qpd.reconstruction import characterize_trace, sweep_rate, plot_efficiency_vs_rate
+
+fid = characterize_trace(iq, 1e5)
+reports = sweep_rate(fid, [1, 3, 10, 30, 100, 300, 1e3, 3e3, 1e4, 3e4])
+plot_efficiency_vs_rate(reports)
+```
+
+![Flip efficiency vs background rate](figures/efficiency_vs_rate.png)
+
+The rate is *pinned* rather than jittered here — it is the independent
+variable, so the measured trace's counting uncertainty has no business in it.
+Note that crowding costs **recall before precision**: the lost flips vanish
+silently rather than being replaced by spurious ones, so purity stays near 1
+long after efficiency has started to fall.
+
+### How big must a burst be before it is found at all?
+
+This is a different question from §12c, which scores individual flips. Here the
+object is the **burst** — the energy deposition — and the question is whether it
+is distinguishable from a background coincidence.
+`qpd.reconstruction.detect_bursts` clusters the reconstructed flip train and
+tests each cluster against the Poisson background with a trials-corrected scan
+statistic:
+
+$$p = \min\left(1,\ \frac{D}{T}\, P\big[\mathrm{Poisson}(\lambda T) \ge m\big]\right)$$
+
+for $m$ flips spanning $T$ in a trace of duration $D$. The $D/T$ trials factor
+is not optional: the cluster was *selected* for being dense, so the raw Poisson
+tail is not a false-alarm rate. Measured false-burst rate on pure background:
+**< 0.01 per 5 s trace**, and rate-invariant from 5 Hz to 500 Hz.
+
+```python
+from qpd.reconstruction import (benchmark_reconstruction, sweep_burst_size,
+                                plot_burst_efficiency, plot_burst_multiplicity)
+
+# take the background rate from the data, de-biased
+bg = benchmark_reconstruction(fidelity=fid, n_trials=8).corrected_rate_hz
+points = sweep_burst_size(fid, [2, 3, 5, 8, 12, 20, 30, 50, 80], background_rate_hz=bg)
+plot_burst_efficiency(points)
+```
+
+![Burst detection efficiency vs multiplicity](figures/burst_efficiency.png)
+
+**Get the background rate from the data**, not from an assumption: too low a
+value manufactures bursts out of background pairs, too high dissolves the small
+ones. `corrected_rate_hz` (§12c) is the right input — the decoded rate
+de-biased by the reconstruction's own efficiency and purity.
+
+### Once found, how many of its quasiparticles are counted?
+
+Not all of them, and the shortfall grows with burst size. A large burst crowds
+its tunnels into a few milliseconds; the pairs that fall within a sample cancel
+in the parity and are never seen. So the recovered multiplicity **saturates**:
+
+![Burst multiplicity, truth vs reconstruction](figures/burst_multiplicity.png)
+
+This is a property of parity readout, not of the clustering, and it is the plot
+that says how far a quoted multiplicity can be trusted. Two readings:
+
+* **Above ~20 quasiparticles the count is a lower bound**, not a measurement.
+  Correcting it needs this curve.
+* **The low-multiplicity end is a selected sample.** Only detected bursts have
+  a measured multiplicity, and a 2-quasiparticle burst is generally found only
+  when it fluctuated upward — so those points sit above an unbiased sample.
+  The saturation at the high end is the real effect; the small positive bias at
+  the low end is selection plus a little background swept into the cluster.
+
+---
+
 ## 13. What sets the limits
 
 **(a) Contrast.** Everything is governed by $C = |h|/\sigma$. Measured on the
@@ -1034,12 +1124,15 @@ than being left to inspection.
 # regression gate (55 checks, ~5 min)
 python checks/check_parity_reconstruction.py
 
-# surrogate-replay benchmarking gate (48 checks, ~3 min) -- §12c
+# surrogate-replay benchmarking gate (71 checks, ~6 min) -- §12c
 python checks/check_reconstruction_benchmark.py
 
 # performance studies: rate / noise / burst-crowding / device sweeps
 python checks/study_parity_reconstruction.py            # all
 python checks/study_parity_reconstruction.py noise      # one
+
+# diagnostic figures for a measured trace -- §12d
+python checks/study_reconstruction_diagnostics.py
 ```
 
 A worked end-to-end demonstration, with the learned branch means overlaid on the
