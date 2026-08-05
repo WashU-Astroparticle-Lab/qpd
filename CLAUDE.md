@@ -45,20 +45,25 @@ qpd/
 ├── CLAUDE.md, README.md, LICENSE
 ├── src/qpd/                           # Installable package (src layout)
 │   ├── __init__.py                    # Re-exports QPD
-│   └── theory/                        # Theory/simulation subpackage
-│       ├── __init__.py                # Re-exports QPD
-│       ├── transmon.py                # Core module (~1177 lines, class QPD)
-│       ├── materials.yaml             # Superconductor properties database
-│       └── qpd.mplstyle              # PRL publication-quality plot style
+│   ├── theory/                        # Theory subpackage
+│   │   ├── __init__.py                # Re-exports QPD
+│   │   ├── transmon.py                # Core module (class QPD)
+│   │   ├── materials.yaml             # Superconductor properties database
+│   │   └── qpd.mplstyle               # PRL publication-quality plot style
+│   ├── simulator/                     # Forward model: I/Q trace generation
+│   ├── reconstruction/                # Inverse problem: flip timing from I/Q
+│   └── mlebench/                      # Dataset generator + grader
 ├── examples/
 │   ├── example_usage.py
 │   └── example_materials.py
 ├── notebooks/
 │   ├── qpd.ipynb
 │   └── std_analysis.ipynb
+├── checks/                            # Verification scripts (exit 0 = pass)
 └── docs/
     ├── theory.md                      # API, physics, and usage docs
-    └── materials.md                   # Material system guide
+    ├── materials.md                   # Material system guide
+    └── reconstruction.md              # Reconstruction methodology notes
 ```
 
 ## Architecture
@@ -71,7 +76,13 @@ All core code lives in `src/qpd/theory/transmon.py`, which defines the `QPD` cla
 - **C_Q fitting**: `compute_quantum_capacitance()` is the forward primitive. `fit_quantum_capacitance()` runs an iminuit (MIGRAD + HESSE) least-squares fit with optional `fit_scale` / `fit_baseline` / `fit_offset` toggles; pass `profile_ratio=True` to additionally run `profile_ratio_likelihood()` and attach the asymmetric 1σ/2σ/3σ profile-likelihood interval on E_J/E_C under `fit['ratio_profile']`. `plot_capacitance_fit()` auto-picks the profile interval for the title when present (toggle via `use_profile`); `plot_likelihood_landscape()` plots the 2D joint (E_J, E_C) chi² contours.
 - **Materials**: `materials.yaml` stores superconductor properties (Al, Hf, AlMn, Nb, TiN). Loaded on demand via `load_materials_database()`.
 
-The `qpd.theory` subpackage is intended to house simulation/theory code; the repo may grow to include other subpackages (e.g., `qpd.fitting`) alongside it.
+Alongside `qpd.theory` the package now carries three further subpackages:
+
+- **`qpd.simulator`** — the forward model (`VNASimulator`): telegraph parity switching, `QuasiparticleBurstModel`, composable offset-charge models (`SawtoothNg`, `ChargeJumpEvents`, `ConstantNg`), `WhiteGaussianNoise`, and the Probst `notch_s21` resonator response. `SimResult` carries the exact sub-sample `flip_times` used as reconstruction truth.
+- **`qpd.reconstruction`** — the inverse problem: recover tunnelling times from an I/Q trace. Two entry points chosen by how the offset charge is driven: `reconstruct_parity_flips_static` (constant `n_g`; two stationary blobs, EM + HMM) and `reconstruct_parity_flips_ramped` (swept `n_g`; learned fold period, sign schedule, ramp-reset comb, charge-jump segmentation, then the same two-state HMM). Both are blind by default. **Both can fail silently**, so `ReconstructionResult.degenerate` / `contrast` must be checked before the output is used; see `docs/reconstruction.md` §13b. Optional `ramp_period=` / `fold_period=` accept hardware-known values, which are verified against the trace rather than trusted.
+- **`qpd.mlebench`** — dataset generator and grader; `grade.match_times` is reused by `qpd.reconstruction.analysis` for scoring.
+
+Verification lives in `checks/`: `check_parity_reconstruction.py` is the reconstruction regression gate (55 checks) and `study_parity_reconstruction.py` runs the rate / noise / burst-crowding / device sweeps.
 
 ## Key Conventions
 

@@ -29,7 +29,9 @@ the statistical machinery is built up from scratch in [§5](#5-the-hidden-markov
 10. [Estimating the tunnelling rate](#10-estimating-the-tunnelling-rate)
 11. [From a decoded sequence to flip times](#11-from-a-decoded-sequence-to-flip-times)
 12. [Scoring against truth](#12-scoring-against-truth)
+12b. [How good is it? Fidelity without truth](#12b-how-good-is-it-fidelity-without-truth)
 13. [What sets the limits](#13-what-sets-the-limits)
+13b. [Knowing when it will not work](#13b-knowing-when-it-will-not-work)
 14. [Reproducing the numbers](#14-reproducing-the-numbers)
 14b. [Looking at the result](#14b-looking-at-the-result)
 15. [Glossary](#15-glossary)
@@ -63,6 +65,11 @@ parameters, the noise level, or how the offset charge was driven. Everything it
 needs is estimated from the data. This is deliberate: it is what a reconstruction
 applied to real measured data must do, and it prevents us from accidentally
 scoring a method that only works because we handed it the answer.
+
+Two optional inputs relax this when the hardware genuinely knows something —
+`ramp_period` (§8.3) and `fold_period`. Both are *verified against the trace*
+rather than trusted, and everything quoted in these notes is the fully blind
+result unless stated otherwise.
 
 Why this is hard, in one number: at the reference operating point a *single
 sample* separates the two parity states by only about **2.7 standard
@@ -390,17 +397,37 @@ whether the bias point carries any parity information.** At the parity-blind
 charge $n_g = 0.25$, where the truth is that no information exists, the fit looks
 superficially the same as at a good bias point.
 
-The honest tell is the *combination* of contrast and decoded dwell time. Define
+One honest tell is the *combination* of contrast and decoded dwell time. Define
 
 $$\text{detectability} = C \sqrt{N_\mathrm{dwell}}, \quad N_\mathrm{dwell} = 1/p,$$
 
 the contrast integrated over one dwell (the $\sqrt{N}$ is the usual averaging
-gain for $N$ independent samples). If the decoder is really segmenting noise, the
-fitted rate is inflated, the dwell collapses, and the product falls. On the
-reference device every working bias point scores $\geq 100$ and every failing one
-$\leq 47$, with nothing in between — so the threshold at 70 sits in an empty gap.
-Traces below it are flagged `degenerate`, and the correct response is to **move
-the bias point**, not to salvage the output.
+gain for $N$ independent samples). If the decoder is really segmenting noise the
+fitted rate is inflated, the dwell collapses, and the product falls: measured on
+the reference device, 105 at $n_g = 0.22$, which works, against 6 at
+$n_g = 0.24$, which does not.
+
+**But detectability alone is not scale-free, and neither statistic works by
+itself.** A genuinely *fast* telegraph also has a short dwell, so a 3 kHz device
+scores only ~22 while still reconstructing at $F_1 = 0.97$. The per-sample
+contrast covers exactly that gap — and fails where detectability works, since EM
+splits a single blob into a spurious pair with contrast ≈0.9 and so cannot
+separate a blind point (0.90) from a marginal but usable one (0.96).
+
+The flag therefore requires **both** to fail, which is what makes it trustworthy
+in each direction:
+
+| case | contrast | detectability | `degenerate` | true $F_1$ |
+|---|---|---|---|---|
+| $n_g=0$, 10 Hz | 3.78 | 432 | False | 1.000 |
+| $n_g=0$, 3 kHz | 3.78 | 22 | False | 0.969 |
+| $n_g=0.22$, 10 Hz | 0.96 | 105 | False | 0.905 |
+| $n_g=0.24$, 10 Hz | 0.90 | 6 | **True** | 0.015 |
+
+When it fires the correct response is to **move the bias point**, not to salvage
+the output. (The two-blob-versus-one-blob likelihood gain was also tried as a
+rate-invariant replacement and is useless here: ≈0 for the usable $n_g = 0.22$
+and the blind $n_g = 0.24$ alike.)
 
 ---
 
@@ -574,7 +601,7 @@ a contrast near 0.9 down to about 0.5.
 
 **A supplied period is not taken on trust.** Commensurability is no test —
 almost any value sits near *some* integer multiple of $P$, so a wrong one
-passes that check and then produces garbage (measured: $1.37\,T$ accepted as
+passes that check and then produces garbage (measured: $1.37 T$ accepted as
 $m = 15$, F1 0.002). The supplied period must instead earn its place on the same
 two tests the blind comb faces: it must improve the likelihood over using no
 comb, and leave no periodic residue in the output. If it fails, the model is
@@ -697,6 +724,84 @@ regime they behave very differently (§13).
 
 ---
 
+## 12b. How good is it? Fidelity without truth
+
+Section 12 scores against known truth, which exists only in simulation. On
+measured data the question becomes: *how well is the parity being assigned?*
+Two estimates are available, and they answer different questions.
+
+**`sample_fidelity`** — the conventional single-shot readout figure. With two
+equal-width Gaussians a contrast $C$ apart and the threshold at their midpoint,
+
+$$F_1^{\text{sample}} = 1 - \frac{1}{2} \mathrm{erfc}\left(\frac{C}{2\sqrt{2}}\right).$$
+
+Quote this when comparing against a single-shot readout. It is markedly
+*pessimistic* for this pipeline, because it describes one sample in isolation
+while the decoder integrates over a whole dwell.
+
+**`decoded_fidelity`** — the expected fraction of samples assigned to the
+correct branch, read straight off the posterior:
+
+$$F^{\text{decoded}} = 1 - \langle \min(\gamma_k,\ 1-\gamma_k) \rangle .$$
+
+A sample whose posterior is $\gamma$ is misassigned with probability
+$\min(\gamma, 1-\gamma)$ *under the fitted model*, so the mean is the model's
+own estimate of its error rate. Validated against simulation truth it tracks the
+real accuracy across four decades of error rate:
+
+| contrast | `sample_fidelity` | `decoded_fidelity` | **true accuracy** |
+|---|---|---|---|
+| 7.63 | 0.9999 | 1.0000 | 1.0000 |
+| 3.82 | 0.9718 | 0.9999 | 0.9999 |
+| 1.91 | 0.8307 | 0.9994 | 0.9991 |
+| 1.05 | 0.7007 | 0.9972 | 0.9965 |
+| 0.91 | 0.6760 | 0.9342 | 0.9420 |
+
+### The caveat that makes this usable
+
+`decoded_fidelity` measures **self-consistency with the fitted model, not
+correctness**. At a parity-blind bias the fitted two-blob model is itself
+spurious, and the decoder is confidently wrong: it claims **0.80** while the
+true accuracy is **0.50**, a coin flip. The same happens on a too-noisy swept
+trace (claims 0.96, truth 0.500).
+
+So it is only meaningful once the model has been established as real:
+
+```python
+if rec.degenerate or rec.contrast < 1.5:
+    print("model not trustworthy — the fidelity estimate is meaningless")
+else:
+    print(f"parity assignment fidelity ~ {rec.decoded_fidelity:.4f}")
+```
+
+That is the division of labour throughout: `degenerate` and `contrast` say
+*whether* the model is real, `decoded_fidelity` says *how good* it is once it is.
+
+### Under a sweep, one number is not enough
+
+The swept case needs more than the fixed-bias one, because the contrast is not
+constant — it sweeps through zero at every parity-blind crossing (§3). A single
+scalar hides where the information actually lives, so `fidelity_vs_phase()`
+resolves it against ramp phase:
+
+```
+phase :  0.03  0.16  0.28  0.41  0.53  0.66  0.78  0.91
+fid   :  0.97  0.96  0.90  0.74  0.56  0.79  0.92  0.96
+```
+
+0.97 away from the crossing, 0.56 at it. Note this also means
+`sample_fidelity` reads *lower* under a sweep than at a fixed bias for the same
+noise, purely because it averages over the blind crossings — do not compare that
+number across the two modes.
+
+### Per event, not per sample
+
+`rec.confidence` is the per-flip analogue: the posterior swing across each
+transition, so $1 - \text{confidence}_i$ is roughly the probability that flip
+$i$ is spurious. It is what `min_confidence` filters on (§14b).
+
+---
+
 ## 13. What sets the limits
 
 **(a) Contrast.** Everything is governed by $C = |h|/\sigma$. Measured on the
@@ -746,10 +851,63 @@ is lost; in the static case a bad bias point loses everything (§6.1).
 
 ---
 
+## 13b. Knowing when it will not work
+
+On measured data there is no truth to check against, so the pipeline has to say
+so itself. Three things are worth checking, in order.
+
+**1. Was the input even valid?** A single non-finite sample used to be enough to
+make the decoder emit one "flip" per sample — the projection origin is the trace
+mean, so one NaN makes every emission NaN, and a NaN comparison in the Viterbi
+backtrace is always False, which alternates the state at every step. Both entry
+points now reject this at the door (`validate_trace`), along with a non-positive
+sample rate. Real DAQ traces do contain dropouts; drop or interpolate them first.
+
+**2. Is the model real?** `rec.degenerate` is the flag; `rec.contrast` is the
+number to look at. As a rule of thumb, contrast $\ge 2$ is comfortable, $\approx 1$
+is marginal, and $< 1$ means EM is splitting a single noise blob and the "two
+branches" are not real. Measured at 10 kHz sampling:
+
+| contrast | $F_1$ | `degenerate` |
+|---|---|---|
+| 7.6 | 1.000 | False |
+| 3.8 | 0.977 | False |
+| 1.9 | 0.952 | False |
+| 1.05 | 0.643 | **True** |
+| 0.91 | 0.077 | **True** |
+
+The flag is deliberately conservative — it fires at contrast 1.05 where $F_1$ is
+still 0.64.
+
+**3. Do the sanity checks agree?** Two that cost nothing and do not depend on any
+threshold:
+
+- **`rec.rate_hz` against physics.** If the fitted tunnelling rate comes back in
+  the kHz at 10 kHz sampling, the decoder is segmenting noise rather than finding
+  tunnelling events.
+- **Look at the I/Q plane.** `plot_iq_plane(iq, branch=rec.branch, model=rec.model)`
+  either shows two separated blobs or it does not. With no truth available this
+  is the strongest independent evidence there is.
+
+Under a sweep the ramped path additionally self-checks that **no periodic comb
+survives in its own output** — tunnelling is Poisson, so a residual pile-up at a
+fixed phase means the reset schedule is wrong (§8). It also rejects a *starved
+phase grid*: when the fold period is commensurate with the sample period the
+grid visits only $P/\Delta t$ distinct phases, most bins are empty, and the sign
+schedule would otherwise be anchored on an empty bin. The bin count is shrunk
+until every bin is populated.
+
+One asymmetry worth internalising: **a wrong model fails quietly, not loudly.**
+Every failure mode above produced tens of thousands of fabricated events with
+every ordinary diagnostic reading normal. That is why these checks exist rather
+than being left to inspection.
+
+---
+
 ## 14. Reproducing the numbers
 
 ```bash
-# regression gate (~2 min)
+# regression gate (55 checks, ~5 min)
 python checks/check_parity_reconstruction.py
 
 # performance studies: rate / noise / burst-crowding / device sweeps
@@ -794,7 +952,15 @@ plot_trace_with_flips(result.iq, 1e5, rec.flip_times,
 ![Raw I/Q with reconstructed tunnelling times](figures/trace_with_flips.png)
 
 Green solid = truth, red dashed = reconstructed, so agreement (and
-disagreement) is visible at a glance. `confidence=rec.confidence` scales each
+disagreement) is visible at a glance. `confidence=rec.confidence` fades
+low-confidence flips, and `min_confidence=0.9` draws only the confident ones,
+reporting in the title how many were hidden. Filter at *plot* time rather than
+at reconstruction time: the full event list survives and the same result can be
+re-plotted at several thresholds.
+
+One caution before choosing a threshold: on marginal data most flips carry low
+confidence, so a 0.9 cut can leave almost nothing (measured at contrast ≈1:
+40 events → 1 at 0.5, → 0 at 0.9). Look at `plt.hist(rec.confidence)` first. `confidence=rec.confidence` scales each
 detected line's opacity, making low-confidence flips look tentative.
 
 **Which view to use depends on the regime, and this matters.** At a *fixed*
@@ -835,6 +1001,16 @@ parameters.
 
 **Emission model.** In an HMM, the probability of an observation given the hidden
 state. Here: a Gaussian about the current branch mean.
+
+**Decoded fidelity.** The expected fraction of samples assigned to the correct
+branch, from the posterior. Measures self-consistency with the fitted model, not
+correctness — read it with `degenerate` (§12b).
+
+**Degenerate (flag).** The pipeline's own verdict that its output should not be
+trusted as a list of events (§13b).
+
+**Detectability.** Contrast integrated over one dwell, $C\sqrt{N_\mathrm{dwell}}$.
+One half of the degeneracy test; not scale-free on its own (§6.1).
 
 **Fold period $P$.** The period with which the branch splitting repeats in time
 under a linear $n_g$ ramp; $P = 0.5/\text{slope}$.
