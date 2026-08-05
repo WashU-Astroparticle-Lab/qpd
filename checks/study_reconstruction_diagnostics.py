@@ -8,6 +8,11 @@ entry point is the same for real data. The trace is characterised once, and its
 fitted fidelity drives every sweep, so all three figures describe the readout
 you actually have rather than a generic device.
 
+The trace is at a **constant offset charge** (n_g = 0, the best-contrast bias),
+which is the operating point these diagnostics target. The sweeps accept a
+swept-n_g fidelity but nothing here is validated against one -- see
+``docs/reconstruction.md`` §12d.
+
 Figures written to ``docs/figures/``:
 
 ``efficiency_vs_rate.png``

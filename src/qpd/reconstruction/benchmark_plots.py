@@ -62,6 +62,15 @@ def plot_efficiency_vs_rate(
         recall long before it costs precision, because the flips that are lost
         are lost silently rather than replaced by spurious ones.
 
+    Notes
+    -----
+    The matching tolerance is not constant along this curve --
+    :func:`~qpd.reconstruction.benchmark.sweep_rate` shrinks it with the dwell,
+    because a fixed 0.5 ms window is meaningless once flips arrive every 33 us.
+    The figure does not say so; each point carries the tolerance it was scored
+    at in :attr:`BenchmarkReport.tol`, and ``docs/reconstruction.md`` §12d
+    explains the behaviour and where it starts to matter.
+
     Returns
     -------
     (fig, ax)
@@ -107,17 +116,6 @@ def plot_efficiency_vs_rate(
                      f"Flip detection vs background rate "
                      f"(contrast {f.contrast_median:.2f}, "
                      f"{reports[0].fidelity.sample_rate / 1e3:.0f} kSa/s)")
-
-        # The matching tolerance is not necessarily constant along this curve
-        # -- `sweep_rate` shrinks it with the dwell -- and a reader comparing
-        # points has to know that.
-        tols = np.array([r.tol for r in reports], float)
-        if tols.size and not np.allclose(tols, tols[0]):
-            ax.annotate(
-                f"match tolerance shrinks with dwell: "
-                f"{tols.max() * 1e6:.0f} to {tols.min() * 1e6:.1f} $\\mu$s",
-                xy=(0.5, -0.20), xycoords="axes fraction", ha="center",
-                fontsize="x-small", color="0.35")
         fig.tight_layout()
     return fig, ax
 

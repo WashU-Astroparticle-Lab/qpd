@@ -402,6 +402,15 @@ def main() -> int:
           f"efficiency {reports[-1].efficiency[0]:.3f}")
     check("the rate is pinned, not jittered, across a rate sweep",
           all(not r.rate_jitter for r in reports))
+    # The tolerance varies along the sweep and the figure deliberately does not
+    # say so, so it has to stay recoverable from the reports themselves.
+    tols = [r.tol for r in reports]
+    check("each point records the tolerance it was scored at",
+          tols[0] > tols[1] > tols[2] and all(t > 0 for t in tols),
+          " > ".join(f"{t * 1e6:.1f}us" for t in tols))
+    check("adaptive_tol=False scores every rate at one fixed window",
+          len({r.tol for r in sweep_rate(fid5, [10.0, 100.0], n_trials=1,
+                                         adaptive_tol=False)}) == 1)
 
     pts = sweep_burst_size(fid5, [3, 8, 30, 80], n_trials=3)
     print("     n_qp 3 / 8 / 30 / 80 -> burst efficiency "

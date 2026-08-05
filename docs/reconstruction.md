@@ -938,6 +938,23 @@ python checks/study_reconstruction_diagnostics.py          # all three
 python checks/study_reconstruction_diagnostics.py burst    # just the burst pair
 ```
 
+**These are for a constant bias.** Everything below is run and validated on a
+fixed-$n_g$ trace ($n_g = 0$, the best-contrast bias), which is the operating
+point these diagnostics target. The sweeps do not refuse a swept-$n_g$
+fidelity, but nothing here has been checked against one, and two things would
+change: the contrast is no longer a single number (§12b), and the surrogate
+carries a replayed reset comb whose rediscovery is retested at every rate.
+Treat a ramped result from §12d as unvalidated.
+
+One consequence worth stating, because it was a real bug: on a fixed bias the
+telegraph's own Lorentzian spectrum peaks at the bottom of the fold-period
+search band, and taken at face value it makes a constant-$n_g$ trace look
+swept. `characterize_trace(mode="auto")` therefore requires the trace to hold
+at least 50 fold cycles before calling it ramped — a real sweep packs thousands
+— and a constant bias now stays `mode="static"`. Pass `mode="static"`
+explicitly if you want to remove the question entirely; that is always the
+safer choice when you know how the measurement was driven.
+
 ### How fast can the background tunnel before flips are lost?
 
 The background is Poisson, so the rate alone sets how often two tunnels land
@@ -958,9 +975,41 @@ plot_efficiency_vs_rate(reports)
 
 The rate is *pinned* rather than jittered here — it is the independent
 variable, so the measured trace's counting uncertainty has no business in it.
-Note that crowding costs **recall before precision**: the lost flips vanish
-silently rather than being replaced by spurious ones, so purity stays near 1
-long after efficiency has started to fall.
+
+Two things to read off this curve.
+
+**Crowding costs recall before precision.** Both numbers come from the same
+one-to-one matching of predicted flip times to true ones: recall (efficiency)
+is matched/true, purity is matched/predicted. They separate because parity is
+only observable as a *change* — when two tunnels land closer than the decoder
+can resolve, the parity returns to where it started and the trace shows no
+transition at all. That deletes two true events while producing *zero* spurious
+predictions. So the shape is diagnostic: recall falling with purity intact means
+crowding, whereas purity falling too means the decoder is segmenting noise and
+inventing transitions (the degenerate case of §13b).
+
+**The matching tolerance shrinks with the dwell**, and the figure does not say
+so — each point carries its own value in `report.tol`. A fixed 0.5 ms window is
+meaningless once flips arrive every 33 µs (it would credit a prediction fifteen
+dwells away as a match), and a tolerance wider than the mean gap also fuses the
+whole trace into one connected component of the matching graph, where the
+grader's assignment step goes quadratic on $10^5$ events and effectively hangs.
+`sweep_rate` therefore uses $\min(0.5\ \text{ms},\ 0.25/\Gamma)$.
+
+Up to 10 kHz this changes nothing — scoring the same traces at a generous fixed
+50 µs gives identical efficiency and purity. Only the 30 kHz point is affected,
+where the tolerance (8.3 µs) falls *below* the 10 µs sample period, so a flip
+found in the right sample but timed one sample out fails to match:
+
+| | adaptive (plotted) | generous 50 µs |
+|---|---|---|
+| efficiency | 0.699 | 0.724 |
+| purity | 0.952 | 0.986 |
+
+The collapse at 30 kHz is real; the plotted point overstates it by about
+2.5 points of recall. Pass `adaptive_tol=False` with an explicit `tol=` to score
+every rate at one fixed window, and keep the rates low enough that it stays
+meaningful.
 
 ### How big must a burst be before it is found at all?
 
