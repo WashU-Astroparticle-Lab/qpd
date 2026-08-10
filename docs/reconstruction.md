@@ -86,7 +86,7 @@ information across many samples in the statistically correct way.
 | Symbol | Meaning | Units |
 |---|---|---|
 | $t$ | time | s |
-| $\Delta t$ | sampling period ($10\ \mu$s here) | s |
+| $\Delta t$ | sampling period ($10\ \mu\text{s}$ here) | s |
 | $n$ | number of samples in the trace | — |
 | $k$ | sample index, $k = 1 \dots n$; $t_k = (k-1)\Delta t$ | — |
 | $z_k = I_k + \mathrm{i}Q_k$ | complex readout sample | a.u. |
@@ -250,10 +250,10 @@ $\Gamma$ per state, the probability of flipping between two consecutive samples 
 
 $$p = \Gamma \Delta t .$$
 
-(At $\Gamma = 10$ Hz and $\Delta t = 10\ \mu$s, $p = 10^{-4}$ — flips are indeed
+(At $\Gamma = 10$ Hz and $\Delta t = 10\ \mu\text{s}$, $p = 10^{-4}$ — flips are indeed
 rare per sample.) The transition matrix is
 
-$$\mathbf{T} = \begin{pmatrix} 1-p & p \\ p & 1-p \end{pmatrix},
+$$\mathbf{T} = \begin{pmatrix} 1-p & p \cr p & 1-p \end{pmatrix},
  \quad T_{ss'} = P(S_{k+1}=s' \mid S_k = s).$$
 
 This is the term that stops one noisy sample from being read as a flip: flipping
@@ -453,7 +453,7 @@ $$P = \frac{0.5}{\text{ramp slope}}$$
 which we call the **fold period**.
 
 For the reference scenario the slope is $5.5 \times 500 = 2750$ per second, so
-$P = 181.8\ \mu$s — about 18 samples.
+$P = 181.8\ \mu\text{s}$ — about 18 samples.
 
 ### 7.2 Finding $P$ blind: look at the variance, not the mean
 
@@ -476,7 +476,7 @@ independent, so the variances add.
 
 So $x^2$ contains a strong periodic tone at the fold frequency $1/P$. We locate it
 with a periodogram (an FFT of $x^2$), then **refine** it, because raw FFT
-resolution is nowhere near good enough: a 5 s trace at $P = 182\ \mu$s contains
+resolution is nowhere near good enough: a 5 s trace at $P = 182\ \mu\text{s}$ contains
 27 500 cycles, so a relative period error of only $3\times10^{-5}$ slides the
 model three quarters of a cycle out of phase by the end of the trace. Refinement
 maximises the *folded contrast* — fold the trace at a trial period, bin by phase,
@@ -677,9 +677,9 @@ gain. Measured recovery: 1 Hz → 1.0, 10 Hz → 9.2, 100 Hz → 98.8, 300 Hz �
 ## 11. From a decoded sequence to flip times
 
 The Viterbi path changes state between two samples, so the flip happened
-somewhere in that $10\ \mu$s interval. Rather than taking the midpoint, we read
+somewhere in that $10\ \mu\text{s}$ interval. Rather than taking the midpoint, we read
 off where the **posterior odds cross even** — linearly interpolating $\gamma_k$
-between the bracketing samples to find where it passes $1/2$. With a $10\ \mu$s
+between the bracketing samples to find where it passes $1/2$. With a $10\ \mu\text{s}$
 sample period against a $0.5$ ms matching tolerance this is a small correction,
 but it is free and unbiased.
 
