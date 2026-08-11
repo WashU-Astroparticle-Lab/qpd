@@ -9,7 +9,7 @@ import numpy as np
 from .emission import (EmissionModel, learn_emission_model,
                        refine_fold_period, validate_trace)
 from .events import extract_flips
-from .hmm import (decode_with_rate, forward_backward,
+from .hmm import (decode_with_rate, decoded_path, forward_backward,
                   gaussian_log_emissions)
 from .ramp import ResetComb, find_reset_comb
 from .segment import segment_and_realign
@@ -213,6 +213,7 @@ def reconstruct_parity_flips_ramped(
     n_segment_iterations: int = 3,
     min_detectability: float = 70.0,
     min_contrast: float = 1.0,
+    decoder: str = "viterbi",
     **emission_kwargs,
 ) -> ReconstructionResult:
     """Recover parity-flip times from a complex readout trace, blind.
@@ -281,6 +282,11 @@ def reconstruct_parity_flips_ramped(
     n_profile_windows : int
         Number of windows tried when picking a jump-free splitting profile to
         drive the change-point search (see :func:`_cleanest_window_model`).
+    decoder : {"viterbi", "posterior"}
+        Which decoding rule turns the HMM output into events; see
+        :func:`~qpd.reconstruction.hmm.decoded_path`. Applies to the final
+        extraction only -- the reset-comb search stays on Viterbi so the
+        nuisance model a trace gets is independent of this choice.
     min_detectability, min_contrast : float
         Thresholds behind :attr:`ReconstructionResult.degenerate`. The trace is
         called unusable only when the median contrast falls below
@@ -452,7 +458,12 @@ def reconstruct_parity_flips_ramped(
             x, mu_a, mu_b, emission.sigma, p_flip_init, n_rate_iterations)
     res, p, history = final
 
-    times, conf = extract_flips(res.path, res.posterior, dt, t0=t0)
+    # Only the FINAL event extraction honours `decoder`. The first-pass decode
+    # and the comb trials above are nuisance detection, not output, and are
+    # deliberately left on Viterbi so the reset schedule a trace gets does not
+    # depend on which decoding rule the caller asked for.
+    path = decoded_path(res, decoder)
+    times, conf = extract_flips(path, res.posterior, dt, t0=t0)
     if min_confidence > 0:
         keep = conf >= min_confidence
         times, conf = times[keep], conf[keep]
@@ -479,6 +490,8 @@ def reconstruct_parity_flips_ramped(
 
     diag.update({
         "residual_comb": residual,
+        "decoder": decoder,
+        "viterbi_path": res.path,
         "degenerate": degenerate,
         "detectability": float(detectability),
         "median_contrast": median_contrast,
@@ -495,7 +508,7 @@ def reconstruct_parity_flips_ramped(
         flip_times=times,
         confidence=conf,
         posterior=res.posterior,
-        branch=res.path,
+        branch=path,
         emission=emission,
         p_flip=p,
         reset_comb=comb,

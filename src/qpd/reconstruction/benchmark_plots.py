@@ -50,6 +50,9 @@ def plot_efficiency_vs_rate(
     figsize=(6.4, 4.2),
     title=None,
     ax=None,
+    label_prefix: str = "",
+    decorate: bool = True,
+    **line_kwargs,
 ):
     """Flip detection efficiency against background tunnelling rate.
 
@@ -61,6 +64,18 @@ def plot_efficiency_vs_rate(
         Also draw purity, which behaves quite differently: crowding destroys
         recall long before it costs precision, because the flips that are lost
         are lost silently rather than replaced by spurious ones.
+    label_prefix : str
+        Prepended to the legend labels. Use it when overlaying two sweeps on
+        one axes -- e.g. comparing decoders.
+    decorate : bool
+        Draw the reference lines, the measured-rate marker and the title. Set
+        False on the second and later calls of an overlay so they are not
+        stamped repeatedly.
+    **line_kwargs
+        Forwarded to both ``errorbar`` calls. When two sweeps agree closely --
+        which is what comparing decoders at good contrast looks like -- the
+        second curve hides the first exactly, so draw the first thick and
+        translucent (``lw=5, alpha=0.3``) and the second thin on top.
 
     Notes
     -----
@@ -90,32 +105,36 @@ def plot_efficiency_vs_rate(
             fig, ax = plt.subplots(figsize=figsize)
         else:
             fig = ax.figure
-        ax.errorbar(rate[order], eff[order], yerr=eff_e[order], marker="o",
-                    ms=4, capsize=2.5, lw=1.4, label="efficiency (recall)")
+        eff_kw = {"marker": "o", "ms": 4, "capsize": 2.5, "lw": 1.4,
+                  **line_kwargs}
+        pur_kw = {"marker": "s", "ms": 3.5, "capsize": 2.5, "lw": 1.2,
+                  "ls": "--", **line_kwargs}
+        ax.errorbar(rate[order], eff[order], yerr=eff_e[order],
+                    label=f"{label_prefix}efficiency (recall)", **eff_kw)
         if show_purity:
-            ax.errorbar(rate[order], pur[order], yerr=pur_e[order], marker="s",
-                        ms=3.5, capsize=2.5, lw=1.2, ls="--",
-                        label="purity (precision)")
+            ax.errorbar(rate[order], pur[order], yerr=pur_e[order],
+                        label=f"{label_prefix}purity (precision)", **pur_kw)
         ax.set_xscale("log")
         ax.set_xlabel("background tunnelling rate [Hz per state]")
         ax.set_ylabel("detection performance")
         ax.set_ylim(-0.02, 1.04)
-        ax.axhline(1.0, color="0.6", lw=0.7, zorder=0)
 
         f = reports[0].fidelity
-        # The measured trace's own rate: the one point on this curve that is
-        # not a hypothetical.
-        ax.axvline(f.rate_hz, color="0.4", lw=0.9, ls=":", zorder=0)
-        # Annotate at the top: the curve starts flat at 1.0 on the left, so the
-        # bottom-left corner belongs to the legend.
-        ax.annotate(f"measured\n{f.rate_hz:.3g} Hz", xy=(f.rate_hz, 0.90),
-                    xytext=(4, 0), textcoords="offset points",
-                    fontsize="x-small", color="0.35", va="top")
-        ax.legend(loc="lower left", frameon=False)
-        ax.set_title(title or
-                     f"Flip detection vs background rate "
-                     f"(contrast {f.contrast_median:.2f}, "
-                     f"{reports[0].fidelity.sample_rate / 1e3:.0f} kSa/s)")
+        if decorate:
+            ax.axhline(1.0, color="0.6", lw=0.7, zorder=0)
+            # The measured trace's own rate: the one point on this curve that
+            # is not a hypothetical.
+            ax.axvline(f.rate_hz, color="0.4", lw=0.9, ls=":", zorder=0)
+            # Annotate at the top: the curve starts flat at 1.0 on the left, so
+            # the bottom-left corner belongs to the legend.
+            ax.annotate(f"measured\n{f.rate_hz:.3g} Hz", xy=(f.rate_hz, 0.90),
+                        xytext=(4, 0), textcoords="offset points",
+                        fontsize="x-small", color="0.35", va="top")
+            ax.set_title(title or
+                         f"Flip detection vs background rate "
+                         f"(contrast {f.contrast_median:.2f}, "
+                         f"{f.sample_rate / 1e3:.0f} kSa/s)")
+        ax.legend(loc="lower left", frameon=False, fontsize="small")
         fig.tight_layout()
     return fig, ax
 

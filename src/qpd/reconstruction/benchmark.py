@@ -1050,5 +1050,5 @@ _RECON_KEYS = frozenset({
     "p_flip_init", "n_rate_iterations", "min_confidence", "segment_blocks",
     "min_detectability", "min_contrast", "model", "emission",
     "segment_charge_jumps", "model_ramp_resets", "ramp_period",
-    "n_profile_windows", "n_segment_iterations",
+    "n_profile_windows", "n_segment_iterations", "decoder",
 })

@@ -38,7 +38,7 @@ import numpy as np
 
 from .emission import validate_trace
 from .events import extract_flips
-from .hmm import decode_with_rate
+from .hmm import decode_with_rate, decoded_path
 
 __all__ = ["StaticBlobModel", "StaticReconstructionResult", "fit_two_blobs",
            "reconstruct_parity_flips_static"]
@@ -267,6 +267,7 @@ def reconstruct_parity_flips_static(
     min_detectability: float = 70.0,
     min_contrast: float = 1.5,
     model: StaticBlobModel | None = None,
+    decoder: str = "viterbi",
 ) -> StaticReconstructionResult:
     """Recover parity-flip times from a **fixed-offset-charge** trace, blind.
 
@@ -319,6 +320,14 @@ def reconstruct_parity_flips_static(
     model : StaticBlobModel, optional
         Pre-fitted blob model; fitted from ``iq`` when omitted. Supplying one is
         the way to force a known bias point, or to reuse a fit across traces.
+    decoder : {"viterbi", "posterior"}
+        Which decoding rule turns the HMM output into events -- the most likely
+        branch *sequence*, or the per-sample marginal thresholded at 1/2. Both
+        run on the same emissions and the same flip prior (the rate is
+        estimated from the posterior either way), so this switches the decoding
+        step alone. See :func:`~qpd.reconstruction.hmm.decoded_path`, and
+        ``notebooks/reconstruction_evaluation.ipynb`` for the measured
+        comparison.
 
     Returns
     -------
@@ -377,7 +386,8 @@ def reconstruct_parity_flips_static(
 
     res, p, history = decode_with_rate(x, mu_a, mu_b, sigma, p_flip_init,
                                        n_rate_iterations)
-    times, conf = extract_flips(res.path, res.posterior, dt, t0=t0)
+    path = decoded_path(res, decoder)
+    times, conf = extract_flips(path, res.posterior, dt, t0=t0)
     if min_confidence > 0:
         keep = conf >= min_confidence
         times, conf = times[keep], conf[keep]
@@ -411,10 +421,12 @@ def reconstruct_parity_flips_static(
         flip_times=times,
         confidence=conf,
         posterior=res.posterior,
-        branch=res.path,
+        branch=path,
         model=fitted,
         p_flip=p,
         diagnostics={
+            "decoder": decoder,
+            "viterbi_path": res.path,
             "rate_hz": p / dt,
             "p_flip_history": history,
             "n_flips": int(times.size),

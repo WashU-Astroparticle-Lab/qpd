@@ -32,6 +32,7 @@ the statistical machinery is built up from scratch in [§5](#5-the-hidden-markov
 12b. [How good is it? Fidelity without truth](#12b-how-good-is-it-fidelity-without-truth)
 12c. [Efficiency and accuracy on measured data, by surrogate replay](#12c-efficiency-and-accuracy-on-measured-data-by-surrogate-replay)
 12d. [Diagnostics: rate response and burst response](#12d-diagnostics-rate-response-and-burst-response)
+12e. [Viterbi or forward-backward?](#12e-viterbi-or-forward-backward)
 13. [What sets the limits](#13-what-sets-the-limits)
 13b. [Knowing when it will not work](#13b-knowing-when-it-will-not-work)
 14. [Reproducing the numbers](#14-reproducing-the-numbers)
@@ -1065,6 +1066,63 @@ that says how far a quoted multiplicity can be trusted. Two readings:
 
 ---
 
+## 12e. Viterbi or forward-backward?
+
+§5 builds both recursions but the pipeline only ever used one of them to
+enumerate events. `decoder=` selects which:
+
+```python
+rec = reconstruct_parity_flips_static(iq, 1e5, decoder="posterior")   # or "viterbi"
+```
+
+Both run on the **same** fitted emissions and the **same** flip prior — the rate
+is estimated from the posterior either way — so the switch isolates the decoding
+step and nothing else. What differs is the objective:
+
+| | optimises | behaviour |
+|---|---|---|
+| `"viterbi"` (default) | the most likely branch **sequence** | the transition prior is paid once per flip, so a brief dip in the evidence does not create a flip *pair* unless it earns its keep globally — conservative |
+| `"posterior"` | the expected number of correct **samples** | the marginal thresholded at ½; nothing couples neighbouring decisions once the marginals are formed, so it follows short excursions Viterbi smooths over |
+
+Note the posterior rule's output need not be a likely trajectory at all — it is
+a per-sample answer to a per-sample question.
+
+**Measured, on the reference fixed bias**, sweeping the replayed noise:
+
+| contrast | Viterbi eff / pur / $F_1$ | fwd-bwd eff / pur / $F_1$ |
+|---|---|---|
+| ≥ 1.36 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| 1.19 | 0.981 / 1.000 / 0.990 | 0.995 / 1.000 / **0.997** |
+| 1.06 | 0.981 / 1.000 / **0.990** | 0.981 / 0.989 / 0.985 |
+| 0.85 | 0.981 / 0.981 / **0.980** | 0.981 / 0.932 / 0.952 |
+| 0.68 | 0.954 / 0.864 / **0.893** | 0.967 / 0.767 / 0.812 |
+
+Three things follow.
+
+* **Above contrast ≈ 1.4 the choice is irrelevant** — the two return the *same
+  sequence*, sample for sample. The posterior is saturated near 0 and 1, so
+  thresholding it recovers the MAP path exactly. At the reference operating
+  point (contrast 3.8) the rate sweep and both burst sweeps are identical under
+  either rule.
+* **Just above contrast 1 the extra recall is nearly free**, and forward-backward
+  edges ahead on $F_1$.
+* **Below that, purity falls away much faster than recall rises**, and Viterbi
+  wins clearly. That is why it is the default.
+
+So the summary is not "Viterbi is better". The two agree wherever the
+measurement is comfortable, and where they differ the right choice depends on
+what a mistake costs: if a missed event is worse than a spurious one — a burst
+search, say — the posterior rule is the better trade, and the table says by how
+much.
+
+Under a ramp, `decoder=` governs only the final event extraction; the
+reset-comb search stays on Viterbi so the nuisance model a trace gets does not
+depend on the caller's choice.
+
+`notebooks/reconstruction_evaluation.ipynb` runs all of this end to end.
+
+---
+
 ## 13. What sets the limits
 
 **(a) Contrast.** Everything is governed by $C = |h|/\sigma$. Measured on the
@@ -1183,6 +1241,9 @@ python checks/study_parity_reconstruction.py noise      # one
 # diagnostic figures for a measured trace -- §12d
 python checks/study_reconstruction_diagnostics.py
 ```
+
+The whole evaluation, end to end and with the decoder comparison of §12e, is
+[`notebooks/reconstruction_evaluation.ipynb`](../notebooks/reconstruction_evaluation.ipynb).
 
 A worked end-to-end demonstration, with the learned branch means overlaid on the
 trace, the posterior, and the reconstruction-vs-truth comparison, is §7 of
