@@ -273,6 +273,37 @@ products of $10^6$ small numbers underflow any floating-point format.
 Note the means carry a time argument: in the ramped case (§7) they *move* from
 sample to sample. The HMM does not care — it only ever needs $\ell_k(s)$.
 
+**What the model asserts — and what it does not.** Ingredients (a) and (b)
+together make one structural claim, and every derivation in this section spends
+it: **given the state path, the samples are independent**,
+
+$$P(x_1, \dots, x_n \mid S_1, \dots, S_n) = \prod_{k=1}^{n} P(x_k \mid S_k).$$
+
+This does *not* say that $x_k$ and $x_{k+1}$ are independent outright. With the
+states unknown — the actual experimental situation — consecutive samples are
+strongly dependent:
+
+$$P(x_k,\ x_{k+1}) = \sum_{s,\,s'} P(S_k = s)\ T_{ss'}\ P(x_k \mid s)\
+P(x_{k+1} \mid s'),$$
+
+which does not factorize, because $T_{ss'}$ couples the two states: flips are
+rare, so if $x_k$ sits near one branch mean, $x_{k+1}$ almost certainly does
+too. The trace visibly *is* correlated — a square wave with noise on top, whose
+autocorrelation time is the parity dwell time, not one sample. The claim is
+that **all** of that sample-to-sample correlation flows through the hidden
+state,
+
+$$x_k \longleftarrow S_k \longrightarrow S_{k+1} \longrightarrow x_{k+1},$$
+
+and none through the noise: given its own state, a sample is branch mean plus a
+fresh independent noise draw, so conditioning on the state blocks the only
+route between past and future. Physically, this is the assertion that the
+measurement noise is white. Both faces of the claim matter below: the
+*conditional independence* is what licenses dropping terms from conditionals in
+the derivations (each drop is paid for by exactly this assumption), and the
+*marginal dependence* is what the algorithm exploits — it is why thousands of
+samples after step $k$ are evidence about $S_k$ at all.
+
 ### 5.3 The forward–backward algorithm (posterior probabilities)
 
 We want, for each $k$, the probability that the branch was $B$ **given the whole
@@ -290,6 +321,14 @@ $$\alpha_k(s) = P(x_1, \dots, x_k,\ S_k = s) \quad\text{— the forward variable
 
 $$\beta_k(s) = P(x_{k+1}, \dots, x_n \mid S_k = s) \quad\text{— the backward variable}$$
 
+In both definitions $s$ pins down the state at the *single* step $k$; the
+states at every other step are left free. $\alpha_k(s)$ is implicitly a sum
+over all state paths ending at $s$, and $\beta_k(s)$ over all paths continuing
+from it — the recursions below perform those exponentially large sums one cheap
+step at a time. Neither is a probability distribution over $s$ (neither sums to
+1 over the states): each is a likelihood of a block of data, as a function of
+which state the chain would be standing in at step $k$.
+
 **Forward recursion.** To be in state $s'$ at step $k+1$ having seen the data so
 far, we must have been in *some* state $s$ at step $k$, transitioned, and then
 emitted $x_{k+1}$:
@@ -299,11 +338,86 @@ $$\alpha_{k+1}(s') = \left[ \sum_{s} \alpha_k(s) T_{ss'} \right] P(x_{k+1} \mid 
 started from $\alpha_1(s) = P(S_1=s)P(x_1\mid s)$, with $P(S_1=s) = 1/2$ (we have
 no prior preference for even or odd).
 
+*Derivation, line by line.* Start from the definition at step $k+1$ and insert
+the state at step $k$ by the law of total probability — the chain was in *some*
+state there, and the two possibilities are exclusive and exhaustive. This is
+exact:
+
+$$\alpha_{k+1}(s') = P(x_1, \dots, x_{k+1},\ S_{k+1}=s')
+= \sum_s P(x_1, \dots, x_{k+1},\ S_k=s,\ S_{k+1}=s').$$
+
+Factor the summand with the chain rule, peeling events in the order the model
+generates them — the past, then the transition, then the new emission. Still
+exact, no assumptions yet:
+
+$$P(x_1, \dots, x_{k+1},\ S_k=s,\ S_{k+1}=s') = F_1 \cdot F_2 \cdot F_3$$
+
+with
+
+$$F_1 = P(x_1, \dots, x_k,\ S_k=s),$$
+
+$$F_2 = P(S_{k+1}=s' \mid x_1, \dots, x_k,\ S_k=s),$$
+
+$$F_3 = P(x_{k+1} \mid x_1, \dots, x_k,\ S_k=s,\ S_{k+1}=s').$$
+
+Now spend the model's assumptions, one per factor:
+
+- $F_1 = \alpha_k(s)$ — the definition of the forward variable at step $k$.
+- $F_2 = T_{ss'}$ — the Markov property: given $S_k$, the old samples carry no
+  further information about the next state.
+- $F_3 = P(x_{k+1} \mid s')$ — emission independence: given its own state, the
+  new sample cares about nothing else.
+
+Substituting, and noting that the emission factor does not depend on the
+summation index $s$, it pulls out of the sum — giving the recursion above. The
+base case $\alpha_1$ is the chain rule with the prior, and each application of
+the recursion preserves the defining property, so induction carries the meaning
+$\alpha_k(s) = P(x_1,\dots,x_k,\ S_k=s)$ to every $k$.
+
 **Backward recursion.** Symmetrically, running from the end of the trace inwards:
 
 $$\beta_k(s) = \sum_{s'} T_{ss'} P(x_{k+1} \mid s') \beta_{k+1}(s')$$
 
-started from $\beta_n(s) = 1$.
+started from $\beta_n(s) = 1$. (At $k=n$ the definition reads
+$P(\varnothing \mid S_n=s)$ — there is no future data left to explain, and the
+probability of an empty set of observations is 1 for either state. This seed is
+forced: it is the only choice for which $\alpha_n(s)\beta_n(s)$ equals the
+full-data joint required by the combining identity below.)
+
+*Derivation, line by line.* Same recipe as the forward case, but everything now
+lives inside a conditional on $S_k = s$. Insert the state at step $k+1$ by
+total probability — exact:
+
+$$\beta_k(s) = P(x_{k+1}, \dots, x_n \mid S_k=s)
+= \sum_{s'} P(x_{k+1}, \dots, x_n,\ S_{k+1}=s' \mid S_k=s).$$
+
+Chain rule in generative order — the transition, then the next emission, then
+the rest of the future — carrying $S_k=s$ along in every factor. Still exact:
+
+$$P(x_{k+1}, \dots, x_n,\ S_{k+1}=s' \mid S_k=s) = G_1 \cdot G_2 \cdot G_3$$
+
+with
+
+$$G_1 = P(S_{k+1}=s' \mid S_k=s),$$
+
+$$G_2 = P(x_{k+1} \mid S_{k+1}=s',\ S_k=s),$$
+
+$$G_3 = P(x_{k+2}, \dots, x_n \mid x_{k+1},\ S_{k+1}=s',\ S_k=s).$$
+
+Now spend the assumptions:
+
+- $G_1 = T_{ss'}$ — the definition of the transition matrix.
+- $G_2 = P(x_{k+1} \mid s')$ — emission independence drops $S_k$.
+- $G_3 = \beta_{k+1}(s')$ — the future is screened off by $S_{k+1}$. The later
+  states grow out of $S_{k+1}$ alone, so the Markov property drops $S_k$; and
+  $x_{k+1}$ is only a noise readout of the very state being conditioned on, so
+  it carries no leftover information about what comes next — emission
+  independence drops it too. What remains is
+  $P(x_{k+2},\dots,x_n \mid S_{k+1}=s')$, the definition of $\beta_{k+1}(s')$.
+
+Substituting gives the recursion. Unlike the forward case, nothing pulls out of
+the sum: all three factors depend on $s'$, because the summation index is now
+the destination state rather than the source.
 
 **Combining.** Because the chain is Markov, past and future are conditionally
 independent given the present state, so
@@ -331,19 +445,77 @@ honest ignorance instead of guessing.
 
 ### 5.4 The Viterbi algorithm (the single best sequence)
 
-The posterior gives a per-sample probability. To *count events* we want one
-definite sequence: the single most likely assignment $S_1,\dots,S_n$ as a whole.
-That is the **Viterbi** algorithm — dynamic programming, structurally the same as
-the forward recursion but with $\sum$ replaced by $\max$:
+**Why the posterior is not enough.** It is tempting to stop at §5.3: call the
+state at each step whichever branch has $\gamma_k > 1/2$. But that answers $n$
+*separate* questions — "which state is more probable at step $k$, hedged over
+all possible paths?" — and the sequence of per-sample winners is not itself
+guaranteed to be a probable path. The failure mode matters for us specifically:
+inside a stretch of ambiguous data $\gamma_k$ hovers near $1/2$, and the
+per-sample winner can chatter across the threshold several times. Each chatter
+pair would be counted as two flips. Since the deliverable is the flip *count*
+and the flip *times*, we should instead ask one question: **which single
+assignment $S_1,\dots,S_n$ is most probable as a whole?**
+
+**The goal.** Maximize $P(S_1,\dots,S_n \mid x_1,\dots,x_n)$ over all $2^n$
+assignments. The denominator $P(x_1,\dots,x_n)$ is the same for every
+assignment, so this is the same as maximizing the joint
+$P(S_1,\dots,S_n,\ x_1,\dots,x_n)$ — and we work with its logarithm, for the
+usual underflow reason (taking the log is harmless: it is monotone, so it moves
+the max without changing *where* the max is).
+
+**The Viterbi variable.** Define the mirror image of $\alpha_k$ with the sum
+over paths replaced by a max:
+
+$$\delta_k(s) = \max_{s_1,\dots,s_{k-1}}
+\log P(x_1,\dots,x_k,\ S_1=s_1,\dots,S_{k-1}=s_{k-1},\ S_k=s)$$
+
+— the score of the **best** path that ends in state $s$ at step $k$, whereas
+$\alpha_k(s)$ was the **total** probability of all of them.
+
+*Derivation of the recursion.* Any path ending in $s'$ at step $k+1$ consists
+of a path ending in *some* state $s$ at step $k$, followed by one transition
+and one emission. By the chain rule and the model assumptions — the identical
+$F_1 F_2 F_3$ factorization of §5.3, in logs — its score splits into
+
+$$\log P(\text{path through } s \text{ to } s',\ \text{data to } k+1)
+= \log P(\text{path to } s,\ \text{data to } k) + \log T_{ss'} + \ell_{k+1}(s').$$
+
+Now fix the predecessor $s$ and maximize over the earlier path. The last two
+terms do not depend on it, so among all paths that pass through $s$ at step
+$k$, the best one is the one with the best prefix, of score $\delta_k(s)$.
+(This is the *optimal substructure* argument: if the best path through $s$ had
+a worse-than-best prefix, swapping in the better prefix would raise its total —
+contradiction.) Then maximize over the predecessor itself:
 
 $$\delta_{k+1}(s') = \max_{s} \left[ \delta_k(s) + \log T_{ss'} \right] + \ell_{k+1}(s')$$
 
-working in logs throughout ($\delta_k(s)$ is the log-probability of the best path
-that ends in state $s$ at step $k$). At each step we record *which* $s$ achieved
-the maximum; at the end we take the better final state and walk the recorded
-choices backwards to read off the whole path. Also $O(n)$.
+with $\ell_{k+1}(s')$ pulled outside because it does not depend on $s$ — the
+same move that pulled the emission out of the forward sum. The base case is
+$\delta_1(s) = \log P(S_1=s) + \ell_1(s)$.
 
-The result is a clean square wave. Flip events are exactly its transitions.
+**Reading off the path — backpointers.** $\delta$ stores only scores, not
+paths. So at each step we also record *which* predecessor won:
+
+$$\psi_{k+1}(s') = \arg\max_{s} \left[ \delta_k(s) + \log T_{ss'} \right].$$
+
+At the end, the best full path must end somewhere: take
+$S_n^* = \arg\max_s \delta_n(s)$, then walk the recorded choices backwards,
+$S_k^* = \psi_{k+1}(S_{k+1}^*)$, down to $k=1$. One forward sweep to fill
+$\delta$ and $\psi$, one backward walk to read the path: $O(n)$, like
+forward–backward.
+
+**Sum versus max.** The recursion is the forward recursion with $\sum$ replaced
+by $\max$ (and probabilities by logs). That is not a coincidence: both
+algorithms exploit the same step-local factorization of the joint, and both
+$\sum$ and $\max$ distribute over it — summing over paths one step at a time
+*marginalizes* (total evidence, §5.3), maximizing one step at a time
+*optimizes* (single best explanation). Two questions, one machinery.
+
+The result is a clean square wave, and flip events are exactly its transitions.
+Unlike thresholded $\gamma$, the path pays the transition toll
+$\log\frac{p}{1-p}$ for *every* flip it declares, jointly — so it chatters only
+where the data genuinely buys the extra flips, which is what makes its
+transition count an honest event count.
 
 ### 5.5 Why this beats a threshold
 
