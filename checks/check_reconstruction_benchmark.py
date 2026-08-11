@@ -32,6 +32,8 @@ Covers:
  12. The rate and burst-size sweeps, including the multiplicity saturation that
      is the whole point of the burst study.
  13. The three diagnostic figures render.
+ 14. The two decoding rules: identical at good contrast, and diverging in the
+     documented direction (recall up, purity down) near the noise floor.
 """
 import sys
 from pathlib import Path
@@ -446,6 +448,59 @@ def main() -> int:
         check("all three diagnostic figures render", False, repr(exc))
     check("an empty sweep is rejected rather than plotted",
           raises(plot_efficiency_vs_rate, []))
+
+    # --- 14. decoding rule ---------------------------------------------------
+    print("\n14. Viterbi vs forward-backward decoding")
+    check("an unknown decoder is rejected",
+          raises(reconstruct_parity_flips_static, truth_trace.iq, SR,
+                 decoder="nope"))
+    # Agreement is only expected where the evidence is strong, so this uses the
+    # best-contrast bias (n_g = 0). At the n_g = 0.20 trace above the contrast
+    # is 1.18 -- already inside the band where the two rules legitimately
+    # differ, which is the point of the divergence test further down.
+    good = build_static_scenario(n_g=0.0, duration=5.0).simulate(seed=1)
+    rv = reconstruct_parity_flips_static(good.iq, SR, decoder="viterbi")
+    rp = reconstruct_parity_flips_static(good.iq, SR, decoder="posterior")
+    check("both decoders run and record which was used",
+          rv.diagnostics["decoder"] == "viterbi"
+          and rp.diagnostics["decoder"] == "posterior")
+    # The rate is estimated from the posterior either way, so switching the
+    # decoder must not move it -- that is what makes the comparison a clean
+    # test of the decoding step alone.
+    check("the decoder does not change the fitted rate or contrast",
+          rv.rate_hz == rp.rate_hz and rv.contrast == rp.contrast,
+          f"{rv.rate_hz:.4f} vs {rp.rate_hz:.4f} Hz")
+    check("the posterior path is the marginal thresholded at 1/2",
+          np.array_equal(rp.branch, (rp.posterior > 0.5).astype(np.int8)))
+    check("at good contrast the two rules return the same sequence",
+          np.array_equal(rv.branch, rp.branch),
+          f"contrast {rv.contrast:.2f}")
+
+    # They must diverge in the documented direction once the evidence is
+    # marginal: the posterior rule follows short excursions, buying recall and
+    # paying purity. This is the claim §12e and the notebook rest on.
+    fnoisy = characterize_trace(
+        build_static_scenario(n_g=0.0, duration=5.0).simulate(seed=1).iq, SR)
+    lo = {d: benchmark_reconstruction(
+              fidelity=characterize_trace(
+                  build_static_scenario(n_g=0.0, duration=5.0).simulate(seed=1).iq,
+                  SR, decoder=d),
+              n_trials=6, noise_scale=5.6, rate_jitter=False)
+          for d in ("viterbi", "posterior")}
+    ev, pv = lo["viterbi"].efficiency[0], lo["viterbi"].purity[0]
+    ep, pp = lo["posterior"].efficiency[0], lo["posterior"].purity[0]
+    print(f"     at contrast {fnoisy.contrast_median / 5.6:.2f}: "
+          f"viterbi {ev:.3f}/{pv:.3f}, posterior {ep:.3f}/{pp:.3f} (eff/pur)")
+    check("near the noise floor the posterior rule has the higher recall",
+          ep >= ev - 1e-9, f"{ep:.3f} vs {ev:.3f}")
+    check("...and pays for it in purity",
+          pp < pv, f"{pp:.3f} vs {pv:.3f}")
+    check("...so Viterbi wins on F1 there",
+          lo["viterbi"].hard_f1[0] > lo["posterior"].hard_f1[0],
+          f"{lo['viterbi'].hard_f1[0]:.3f} vs {lo['posterior'].hard_f1[0]:.3f}")
+    check("the decoder reaches every surrogate through recon_kwargs",
+          all(t.score.n_truth >= 0 for t in lo["posterior"].trials)
+          and lo["posterior"].fidelity.recon_kwargs == {"decoder": "posterior"})
 
     print()
     if _failures:
