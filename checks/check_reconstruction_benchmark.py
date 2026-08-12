@@ -32,6 +32,8 @@ Covers:
  12. The rate and burst-size sweeps, including the multiplicity saturation that
      is the whole point of the burst study.
  13. The three diagnostic figures render.
+ 14b. Error-bar semantics: scatter vs precision-of-estimate, and that pooling
+      weights trials by evidence rather than one-vote-each.
  14. The two decoding rules: identical at good contrast, and diverging in the
      documented direction (recall up, purity down) near the noise floor.
 """
@@ -448,6 +450,67 @@ def main() -> int:
         check("all three diagnostic figures render", False, repr(exc))
     check("an empty sweep is rejected rather than plotted",
           raises(plot_efficiency_vs_rate, []))
+
+    # --- 14b. error-bar semantics -------------------------------------------
+    print("\n14b. Error bars: scatter vs precision of the estimate")
+    fe = characterize_trace(
+        build_static_scenario(n_g=0.18, duration=5.0, sample_rate=1e4,
+                              tunnel_rate_hz=66.0).simulate(seed=1).iq, 1e4)
+    small = sweep_rate(fe, [3.0], n_trials=30, seed=3)[0]
+    big = sweep_rate(fe, [3.0], n_trials=120, seed=3)[0]
+    # The trial-to-trial SD estimates a population scatter, so 4x the trials
+    # must NOT shrink it appreciably; the pooled/bootstrap errors must.
+    check("trial scatter (sd) does not shrink with n_trials",
+          big.purity[1] > 0.5 * small.purity[1],
+          f"{small.purity[1]:.4f} -> {big.purity[1]:.4f}")
+    check("pooled binomial error shrinks with n_trials",
+          big.purity_pooled[1] < small.purity_pooled[1],
+          f"{small.purity_pooled[1]:.4f} -> {big.purity_pooled[1]:.4f}")
+    check("bootstrap error shrinks with n_trials",
+          big.purity_bootstrap[1] < small.purity_bootstrap[1],
+          f"{small.purity_bootstrap[1]:.4f} -> {big.purity_bootstrap[1]:.4f}")
+    check("bootstrap is never tighter than binomial (it adds clustering)",
+          big.purity_bootstrap[1] >= 0.9 * big.purity_pooled[1],
+          f"boot {big.purity_bootstrap[1]:.4f} vs binom {big.purity_pooled[1]:.4f}")
+    check("pooled and bootstrap agree on the point estimate",
+          abs(big.purity_pooled[0] - big.purity_bootstrap[0]) < 1e-12)
+    check("pooled F1 is consistent with pooled precision and recall",
+          abs(big.hard_f1_pooled
+              - 2 * big.efficiency_pooled[0] * big.purity_pooled[0]
+              / (big.efficiency_pooled[0] + big.purity_pooled[0])) < 1e-12)
+
+    # Pooling must weight by evidence: a trial with no truth and a burst of
+    # spurious flips has to count for more than one vote among many.
+    n_pred = np.array([t.score.n_pred for t in big.trials])
+    if n_pred.max() > 3 * max(np.median(n_pred), 1):
+        check("pooling weights trials by evidence, mean-of-ratios does not",
+              big.purity_pooled[0] <= big.purity[0] + 1e-9,
+              f"pooled {big.purity_pooled[0]:.3f} vs mean-of-ratios "
+              f"{big.purity[0]:.3f} (max n_pred {n_pred.max()}, "
+              f"median {int(np.median(n_pred))})")
+    # The closed form and the bootstrap estimate the SAME quantity; agreeing
+    # is what licenses making the deterministic one the default.
+    cl, cle = big.purity_clustered
+    bo, boe = big.purity_bootstrap
+    check("closed-form and bootstrap agree on the point estimate",
+          abs(cl - bo) < 1e-12)
+    check("closed-form and bootstrap errors agree within 10%",
+          abs(cle - boe) < 0.10 * max(cle, boe),
+          f"clustered {cle:.5f} vs bootstrap {boe:.5f}")
+    check("the closed form needs no seed: it is deterministic",
+          big.purity_clustered == big.purity_clustered)
+    small_cl = small.purity_clustered[1]
+    check("closed-form error shrinks with n_trials",
+          cle < small_cl, f"{small_cl:.5f} -> {cle:.5f}")
+    check("an unknown err= is rejected",
+          raises(plot_efficiency_vs_rate, [big], err="nope"))
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as _plt
+    for kind in ("clustered", "bootstrap", "binomial", "sd"):
+        plot_efficiency_vs_rate([big], err=kind)
+    _plt.close("all")
+    check("all four err= modes render", True)
 
     # --- 14. decoding rule ---------------------------------------------------
     print("\n14. Viterbi vs forward-backward decoding")

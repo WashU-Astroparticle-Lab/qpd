@@ -425,16 +425,176 @@ class BenchmarkReport:
             return float("nan"), float("nan")
         return float(np.mean(v)), float(np.std(v, ddof=1) if v.size > 1 else 0.0)
 
+    def _pooled(self, denom: str) -> tuple[float, float]:
+        """Ratio of summed counts, with its binomial error.
+
+        Every trial contributes its *events* rather than its ratio, which
+        changes two things and both matter:
+
+        * The error shrinks as ``1/sqrt(total events)``, so it falls with
+          ``n_trials`` -- unlike :meth:`_agg`, whose spread converges to the
+          population scatter and stays put however long you run.
+        * Trials are weighted by the evidence they carry. Averaging ratios
+          gives a trial holding 3 events the same weight as one holding 500,
+          which hides rare catastrophic trials. Measured at 1 Hz on a
+          contrast-1.6 trace: two surrogates out of 200 contained *no* real
+          flips at all, yet the decoder segmented noise into ~100 spurious ones
+          each. They are 1% of the mean-of-ratios and 26% of every prediction
+          made -- mean-of-ratios reported purity 0.96, pooled reported 0.74.
+
+        The interval is the normal approximation, so it is only sensible away
+        from 0 and 1; near the bounds prefer Wilson or Clopper-Pearson.
+        """
+        num = sum(int(t.score.n_matched) for t in self.trials)
+        den = sum(int(getattr(t.score, denom)) for t in self.trials)
+        if den <= 0:
+            return float("nan"), float("nan")
+        p = num / den
+        return float(p), float(np.sqrt(max(p * (1.0 - p), 0.0) / den))
+
+    def _ratio_clustered(self, denom: str) -> tuple[float, float]:
+        """Pooled ratio with the linearised cluster variance -- closed form.
+
+        The delta-method variance of a ratio of cluster totals (Cochran's
+        ratio estimator, standard in survey sampling):
+
+            V(p) = n / ((n-1) * (sum b_i)^2) * sum_i (a_i - p*b_i)^2
+
+        with ``a_i`` the matched count in trial ``i`` and ``b_i`` its
+        denominator. Each trial enters as one *cluster*, so this makes the same
+        correction as :meth:`_bootstrap` -- the effective sample size is the
+        number of trials, not of events -- but it is deterministic, exact and
+        instant: no resample count to pick, no seed.
+
+        The two agree to 3-4 significant figures wherever the trial sizes are
+        not wildly heterogeneous (measured: 0.00305 vs 0.00304 for purity at
+        3 Hz, 0.00124 vs 0.00123 at 100 Hz). They part company exactly where
+        the linearisation is least trustworthy -- at 1 Hz, where two trials of
+        200 carry a quarter of all events, delta gives 0.114, the jackknife
+        0.126 and the bootstrap 0.112. Treat that spread as the warning it is,
+        and cross-check with :attr:`purity_bootstrap` when it appears.
+        """
+        a = np.array([t.score.n_matched for t in self.trials], dtype=float)
+        b = np.array([getattr(t.score, denom) for t in self.trials],
+                     dtype=float)
+        n = a.size
+        tot = b.sum()
+        if n == 0 or tot <= 0:
+            return float("nan"), float("nan")
+        p = float(a.sum() / tot)
+        if n < 2:
+            return p, float("nan")
+        var = n / ((n - 1) * tot ** 2) * float(np.sum((a - p * b) ** 2))
+        return p, float(np.sqrt(max(var, 0.0)))
+
+    @property
+    def efficiency_clustered(self) -> tuple[float, float]:
+        """Pooled recall with the closed-form cluster error. **The default.**
+
+        Estimates the same thing as :attr:`efficiency_bootstrap` without a
+        resample count or a seed.
+        """
+        return self._ratio_clustered("n_truth")
+
+    @property
+    def purity_clustered(self) -> tuple[float, float]:
+        """Pooled precision with the closed-form cluster error."""
+        return self._ratio_clustered("n_pred")
+
     # -- detection ---------------------------------------------------------
     @property
     def efficiency(self) -> tuple[float, float]:
-        """Recall (matched / true) as ``(mean, std)`` over trials."""
+        """Recall (matched / true) as ``(mean, std)`` over trials.
+
+        The second entry is the trial-to-trial *scatter*, not the precision of
+        the mean: it answers "how much would one more trace like mine vary",
+        and it does **not** shrink with ``n_trials``. For "how efficient is the
+        algorithm here", which does improve with more trials, use
+        :attr:`efficiency_clustered`.
+        """
         return self._agg("efficiency")
 
     @property
     def purity(self) -> tuple[float, float]:
-        """Precision (matched / predicted) as ``(mean, std)``."""
+        """Precision (matched / predicted) as ``(mean, std)``.
+
+        Same caveat as :attr:`efficiency`; see :attr:`purity_pooled`.
+        """
         return self._agg("purity")
+
+    def _bootstrap(self, denom: str, n_resamples: int = 2000,
+                   seed: int = 0) -> tuple[float, float]:
+        """Pooled ratio with a cluster-aware error, by resampling *trials*.
+
+        The binomial error of :meth:`_pooled` assumes the pooled events are
+        independent. They are not: they arrive in trial-sized clusters, and a
+        single surrogate that segments noise contributes a hundred correlated
+        failures at once. The effective sample size is therefore the number of
+        *trials*, not the number of events, and the binomial interval is far
+        too tight -- measured at 1 Hz, the pooled purity wandered over
+        0.98 / 0.77 / 0.83 for 25 / 100 / 400 trials while the binomial error
+        claimed +/-0.01.
+
+        Resampling whole trials with replacement respects that clustering, and
+        still tightens as ``1/sqrt(n_trials)``. It costs nothing: the per-trial
+        counts are already stored, so no reconstruction is repeated.
+        """
+        num = np.array([t.score.n_matched for t in self.trials], dtype=float)
+        den = np.array([getattr(t.score, denom) for t in self.trials],
+                       dtype=float)
+        tot = den.sum()
+        if tot <= 0 or num.size == 0:
+            return float("nan"), float("nan")
+        point = float(num.sum() / tot)
+        rng = np.random.default_rng(seed)
+        idx = rng.integers(0, num.size, size=(int(n_resamples), num.size))
+        d = den[idx].sum(axis=1)
+        ok = d > 0
+        if not np.any(ok):
+            return point, float("nan")
+        draws = num[idx].sum(axis=1)[ok] / d[ok]
+        return point, float(np.std(draws, ddof=1))
+
+    @property
+    def efficiency_bootstrap(self) -> tuple[float, float]:
+        """Pooled recall with a trial-level bootstrap error.
+
+        The most defensible of the three: it improves with ``n_trials`` like
+        :attr:`efficiency_pooled`, but unlike it does not pretend the events
+        within a trial are independent.
+        """
+        return self._bootstrap("n_truth")
+
+    @property
+    def purity_bootstrap(self) -> tuple[float, float]:
+        """Pooled precision with a trial-level bootstrap error."""
+        return self._bootstrap("n_pred")
+
+    @property
+    def efficiency_pooled(self) -> tuple[float, float]:
+        """Recall over pooled counts, ``(value, binomial error)``.
+
+        Use this when the question is *how efficient is the reconstruction at
+        this operating point* -- a property of the algorithm, estimated by
+        Monte Carlo, where more trials should buy a better answer. Use
+        :attr:`efficiency` when the question is *how much would one more trace
+        like mine vary*.
+        """
+        return self._pooled("n_truth")
+
+    @property
+    def purity_pooled(self) -> tuple[float, float]:
+        """Precision over pooled counts, ``(value, binomial error)``."""
+        return self._pooled("n_pred")
+
+    @property
+    def hard_f1_pooled(self) -> float:
+        """F1 built from the pooled precision and recall."""
+        e, _ = self.efficiency_pooled
+        p, _ = self.purity_pooled
+        if not (np.isfinite(e) and np.isfinite(p)) or (e + p) <= 0:
+            return float("nan")
+        return float(2 * e * p / (e + p))
 
     @property
     def hard_f1(self) -> tuple[float, float]:

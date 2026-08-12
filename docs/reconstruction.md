@@ -1184,6 +1184,53 @@ The collapse at 30 kHz is real; the plotted point overstates it by about
 every rate at one fixed window, and keep the rates low enough that it stays
 meaningful.
 
+### What the error bars mean
+
+Two different questions hide behind "the error bar", and they behave in
+opposite ways as you add trials.
+
+| | question | shrinks with `n_trials`? |
+|---|---|---|
+| `report.efficiency` | *how much would one more trace like mine vary?* | **no** — converges to the population scatter |
+| `report.efficiency_pooled` | *how efficient is the algorithm here?* | yes, as $1/\sqrt{N_\text{events}}$ |
+| `report.efficiency_clustered` | same, honest about clustering, closed form | yes, as $1/\sqrt{n_\text{trials}}$ |
+| `report.efficiency_bootstrap` | same quantity, by resampling trials | yes, as $1/\sqrt{n_\text{trials}}$ |
+
+`benchmark_reconstruction` reports the first, because you have one real trace
+and it is one draw from that distribution. A **sweep** is asking the second
+question — it estimates a curve — so `plot_efficiency_vs_rate` defaults to
+`err="clustered"`.
+
+Pooling is not only about the error bar. Averaging *ratios* gives a trial
+holding 3 events the same weight as one holding 500, and that hides rare
+catastrophic trials. Measured at 1 Hz on a contrast-1.6 trace: two surrogates
+out of 200 contained **no real flips at all**, yet the decoder segmented noise
+into ~100 spurious ones each. They are 1% of the mean-of-ratios and **26% of
+every prediction made** — mean-of-ratios reports purity 0.96, pooling reports
+0.74. The pooled number is the one that answers "of every flip I claimed, what
+fraction was real".
+
+Why not the plain binomial: the pooled events are *not* independent.
+They arrive in trial-sized clusters, so one bad surrogate fails a hundred times
+at once and the effective sample size is the number of trials, not of events.
+At that 1 Hz point the pooled purity wandered 0.98 / 0.77 / 0.83 for 25 / 100 /
+400 trials while the binomial claimed ±0.01; the cluster-aware error gives ±0.15
+at 100 trials and ±0.07 at 400 — large enough to cover the swing, and still
+tightening as $1/\sqrt{n}$.
+
+**No resample count is needed.** The default is the closed-form delta-method
+variance of a ratio of cluster totals (Cochran's ratio estimator),
+
+$$\hat V(\hat p)=\frac{n}{(n-1)\left(\sum_i b_i\right)^2}\sum_i\left(a_i-\hat p\,b_i\right)^2,$$
+
+with $a_i$ the matched count in trial $i$ and $b_i$ its denominator. It is
+deterministic and instant. `err="bootstrap"` estimates the same quantity by
+resampling whole trials and agrees to 3–4 significant figures (0.00305 vs
+0.00304 for purity at 3 Hz; 0.00124 vs 0.00123 at 100 Hz). They diverge only
+where a handful of trials dominate the totals — at 1 Hz, delta gives 0.114, the
+jackknife 0.126, the bootstrap 0.112 — and that spread is itself the signal
+that the tail is running the answer.
+
 ### How big must a burst be before it is found at all?
 
 This is a different question from §12c, which scores individual flips. Here the
