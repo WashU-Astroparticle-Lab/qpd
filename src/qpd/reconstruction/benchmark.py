@@ -85,6 +85,8 @@ __all__ = [
     "sweep_rate",
     "sweep_burst_size",
     "BurstSizePoint",
+    "implied_rate_hz",
+    "burst_n50",
 ]
 
 # Fractional departure of `BenchmarkReport.closure` from 1 that earns a warning.
@@ -1227,3 +1229,82 @@ _RECON_KEYS = frozenset({
     "segment_charge_jumps", "model_ramp_resets", "ramp_period",
     "n_profile_windows", "n_segment_iterations", "decoder",
 })
+
+
+def implied_rate_hz(reports, reported_rate_hz: float | None = None) -> float:
+    """True tunnelling rate implied by what the pipeline reported.
+
+    The pipeline does not report the truth: it loses real flips (efficiency)
+    and admits spurious ones (purity), so a device at true rate ``r`` reports
+    ``r * efficiency(r) / purity(r)``. A :func:`sweep_rate` measures both of
+    those as functions of ``r``, so the observed count can be inverted against
+    the sweep -- and the answer is then consistent with that very curve.
+
+    This is what used to be drawn on the figure as a "measured rate" marker.
+    It was removed because one trace admits three different rates and a single
+    labelled line could not say which was meant:
+
+    * ``fidelity.rate_hz`` -- posterior-threshold crossings, counted before any
+      ``min_confidence`` filter, and from a different rule than the Viterbi
+      flip list. Measured on a 1 s trace at contrast 2.4: 22 Hz.
+    * the reported count, ``n_flips / duration`` -- same decoder and same cut
+      as the sweep, but depressed by every flip the pipeline missed: 16 Hz.
+    * what those imply about the device, which is this function and the only
+      one on the same footing as the x-axis: 17.1 Hz.
+
+    Parameters
+    ----------
+    reports : list of BenchmarkReport
+        Output of :func:`sweep_rate`.
+    reported_rate_hz : float, optional
+        The rate to invert. Defaults to the measured trace's own reported
+        count, ``n_flips / duration``.
+
+    Returns
+    -------
+    float, or nan when the reported rate falls outside the swept range, where
+    there is nothing to invert against and extrapolating would be a guess.
+    """
+    reports = list(reports)
+    if not reports:
+        raise ValueError("no reports to invert")
+    if reported_rate_hz is None:
+        f = reports[0].fidelity
+        reported_rate_hz = (f.n_flips / f.duration if f.duration > 0
+                            else float("nan"))
+    rate = np.array([np.mean([t.rate_injected for t in r.trials])
+                     for r in reports], dtype=float)
+    eff = np.array([r.efficiency_clustered[0] for r in reports], dtype=float)
+    pur = np.array([r.purity_clustered[0] for r in reports], dtype=float)
+    ok = np.isfinite(rate) & np.isfinite(eff) & np.isfinite(pur) & (pur > 0)
+    if ok.sum() < 2 or not np.isfinite(reported_rate_hz) or reported_rate_hz <= 0:
+        return float("nan")
+    rate, eff, pur = rate[ok], eff[ok], pur[ok]
+    order = np.argsort(rate)
+    rate = rate[order]
+    predicted = rate * eff[order] / pur[order]
+    if not np.all(np.diff(predicted) > 0):
+        keep = np.concatenate([[True], np.diff(predicted) > 0])
+        predicted, rate = predicted[keep], rate[keep]
+    if predicted.size < 2 or not (predicted[0] <= reported_rate_hz <= predicted[-1]):
+        return float("nan")
+    return float(np.exp(np.interp(np.log(reported_rate_hz), np.log(predicted),
+                                  np.log(rate))))
+
+
+def burst_n50(points) -> float:
+    """Burst multiplicity at which detection efficiency crosses one half.
+
+    The single summary number of a :func:`sweep_burst_size` curve. Returned
+    rather than annotated on the figure. ``nan`` if the curve does not cross.
+    """
+    pts = sorted(points, key=lambda p: p.n_qp_expected)
+    q = np.array([p.n_qp_expected for p in pts], dtype=float)
+    e = np.array([p.efficiency for p in pts], dtype=float)
+    cross = np.flatnonzero((e[:-1] < 0.5) & (e[1:] >= 0.5))
+    if not cross.size:
+        return float("nan")
+    i = int(cross[0])
+    span = e[i + 1] - e[i]
+    return float(q[i] + (0.5 - e[i]) * (q[i + 1] - q[i]) / span if span
+                 else q[i])
