@@ -52,6 +52,7 @@ def plot_efficiency_vs_rate(
     ax=None,
     label_prefix: str = "",
     decorate: bool = True,
+    err: str = "bootstrap",
     **line_kwargs,
 ):
     """Flip detection efficiency against background tunnelling rate.
@@ -64,6 +65,19 @@ def plot_efficiency_vs_rate(
         Also draw purity, which behaves quite differently: crowding destroys
         recall long before it costs precision, because the flips that are lost
         are lost silently rather than replaced by spurious ones.
+    err : {"bootstrap", "binomial", "sd"}
+        Which uncertainty to draw, all on the same pooled ratio except "sd".
+
+        * ``"bootstrap"`` (default) resamples whole *trials*, so it improves
+          with ``n_trials`` and still respects the fact that a trial's events
+          are correlated -- a surrogate that segments noise fails a hundred
+          times at once, not a hundred independent times.
+        * ``"binomial"`` is the textbook interval on the pooled ratio. Cheaper
+          to explain, but it treats pooled events as independent and is
+          consequently too tight where trials are heterogeneous.
+        * ``"sd"`` is the trial-to-trial scatter, which answers a different
+          question ("how much would one more trace vary") and does **not**
+          shrink however long you run.
     label_prefix : str
         Prepended to the legend labels. Use it when overlaying two sweeps on
         one axes -- e.g. comparing decoders.
@@ -93,11 +107,17 @@ def plot_efficiency_vs_rate(
     reports = list(reports)
     if not reports:
         raise ValueError("no reports to plot")
+    keys = {"bootstrap": ("efficiency_bootstrap", "purity_bootstrap"),
+            "binomial": ("efficiency_pooled", "purity_pooled"),
+            "sd": ("efficiency", "purity")}
+    if err not in keys:
+        raise ValueError(f"err must be one of {sorted(keys)}; got {err!r}")
     rate = np.array([_injected_rate(r) for r in reports], float)
-    eff = np.array([r.efficiency[0] for r in reports], float)
-    eff_e = np.array([r.efficiency[1] for r in reports], float)
-    pur = np.array([r.purity[0] for r in reports], float)
-    pur_e = np.array([r.purity[1] for r in reports], float)
+    ekey, pkey = keys[err]
+    eff = np.array([getattr(r, ekey)[0] for r in reports], float)
+    eff_e = np.array([getattr(r, ekey)[1] for r in reports], float)
+    pur = np.array([getattr(r, pkey)[0] for r in reports], float)
+    pur_e = np.array([getattr(r, pkey)[1] for r in reports], float)
     order = np.argsort(rate)
 
     with plt.style.context(_STYLE):

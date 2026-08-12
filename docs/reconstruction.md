@@ -1184,6 +1184,39 @@ The collapse at 30 kHz is real; the plotted point overstates it by about
 every rate at one fixed window, and keep the rates low enough that it stays
 meaningful.
 
+### What the error bars mean
+
+Two different questions hide behind "the error bar", and they behave in
+opposite ways as you add trials.
+
+| | question | shrinks with `n_trials`? |
+|---|---|---|
+| `report.efficiency` | *how much would one more trace like mine vary?* | **no** — converges to the population scatter |
+| `report.efficiency_pooled` | *how efficient is the algorithm here?* | yes, as $1/\sqrt{N_\text{events}}$ |
+| `report.efficiency_bootstrap` | same, but honest about clustering | yes, as $1/\sqrt{n_\text{trials}}$ |
+
+`benchmark_reconstruction` reports the first, because you have one real trace
+and it is one draw from that distribution. A **sweep** is asking the second
+question — it estimates a curve — so `plot_efficiency_vs_rate` defaults to
+`err="bootstrap"`.
+
+Pooling is not only about the error bar. Averaging *ratios* gives a trial
+holding 3 events the same weight as one holding 500, and that hides rare
+catastrophic trials. Measured at 1 Hz on a contrast-1.6 trace: two surrogates
+out of 200 contained **no real flips at all**, yet the decoder segmented noise
+into ~100 spurious ones each. They are 1% of the mean-of-ratios and **26% of
+every prediction made** — mean-of-ratios reports purity 0.96, pooling reports
+0.74. The pooled number is the one that answers "of every flip I claimed, what
+fraction was real".
+
+Why bootstrap over the plain binomial: the pooled events are *not* independent.
+They arrive in trial-sized clusters, so one bad surrogate fails a hundred times
+at once and the effective sample size is the number of trials, not of events.
+At that 1 Hz point the pooled purity wandered 0.98 / 0.77 / 0.83 for 25 / 100 /
+400 trials while the binomial claimed ±0.01; the trial-level bootstrap gives
+±0.15 at 100 trials and ±0.07 at 400 — large enough to cover the swing, and
+still tightening as $1/\sqrt{n}$.
+
 ### How big must a burst be before it is found at all?
 
 This is a different question from §12c, which scores individual flips. Here the
