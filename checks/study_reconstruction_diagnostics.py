@@ -39,7 +39,8 @@ matplotlib.use("Agg")
 from reconstruction_scenarios import build_static_scenario  # noqa: E402
 
 from qpd.reconstruction import (benchmark_reconstruction,  # noqa: E402
-                                characterize_trace, plot_burst_efficiency,
+                                burst_n50, characterize_trace,
+                                implied_rate_hz, plot_burst_efficiency,
                                 plot_burst_multiplicity,
                                 plot_efficiency_vs_rate, sweep_burst_size,
                                 sweep_rate)
@@ -79,6 +80,11 @@ def main(which="all") -> int:
         for r, rt in zip(reports, RATES):
             print(f"  {rt:9.4g} {r.efficiency[0]:7.3f} "
                   f"{r.purity[0]:7.3f} {r.hard_f1[0]:7.3f}")
+        # Numbers that used to be stamped on the figure as a labelled line.
+        print(f"  reported flip rate on the measured trace: "
+              f"{fid.n_flips / fid.duration:.3g} Hz")
+        print(f"  true rate that implies (curve inversion) : "
+              f"{implied_rate_hz(reports):.3g} Hz")
         fig, _ = plot_efficiency_vs_rate(reports)
         fig.savefig(FIGDIR / "efficiency_vs_rate.png", dpi=200)
         print(f"  wrote {FIGDIR / 'efficiency_vs_rate.png'}")
@@ -93,6 +99,7 @@ def main(which="all") -> int:
                   f"{p.efficiency:9.3f} +/- {p.efficiency_err:.3f} "
                   f"{p.mean_n_qp_true:7.1f} {p.mean_n_qp_detected:7.1f} "
                   f"{p.bias:+8.1f}")
+        print(f"  50% burst detection efficiency at {burst_n50(pts):.1f} qp")
         fig, _ = plot_burst_efficiency(pts)
         fig.savefig(FIGDIR / "burst_efficiency.png", dpi=200)
         print(f"  wrote {FIGDIR / 'burst_efficiency.png'}")

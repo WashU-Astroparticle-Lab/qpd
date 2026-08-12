@@ -41,6 +41,8 @@ from qpd.reconstruction.benchmark import (
     benchmark_reconstruction,
     benchmark_vs_noise,
     characterize_trace,
+    burst_n50,
+    implied_rate_hz,
     sweep_burst_size,
     sweep_rate,
 )
@@ -133,6 +135,8 @@ __all__ = [
     "sweep_rate",
     "sweep_burst_size",
     "BurstSizePoint",
+    "implied_rate_hz",
+    "burst_n50",
     "plot_efficiency_vs_rate",
     "plot_burst_efficiency",
     "plot_burst_multiplicity",

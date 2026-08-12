@@ -1157,6 +1157,20 @@ plot_efficiency_vs_rate(reports)
 
 ![Flip efficiency vs background rate](figures/efficiency_vs_rate.png)
 
+**There is no "measured rate" marker on this figure, deliberately.** One trace
+admits three different rates and a single labelled line cannot say which it
+means: `fidelity.rate_hz` counts *posterior*-threshold crossings before any
+`min_confidence` filter (22 Hz on a measured 1 s trace at contrast 2.4); the
+reported count `n_flips / duration` uses the same decoder and cut as the sweep
+but is depressed by every flip missed (16 Hz); and the true rate those imply —
+the only one on the same footing as this x-axis, which is an *injected* true
+rate — is 17.1 Hz. Ask for the last explicitly:
+
+```python
+from qpd.reconstruction import implied_rate_hz
+implied_rate_hz(reports)      # inverts r -> r * efficiency(r) / purity(r)
+```
+
 The rate is *pinned* rather than jittered here — it is the independent
 variable, so the measured trace's counting uncertainty has no business in it.
 
@@ -1269,6 +1283,9 @@ plot_burst_efficiency(points)
 ```
 
 ![Burst detection efficiency vs multiplicity](figures/burst_efficiency.png)
+
+`burst_n50(points)` returns the multiplicity at which the curve crosses one
+half — the single summary number — rather than stamping it on the figure.
 
 **Get the background rate from the data**, not from an assumption: too low a
 value manufactures bursts out of background pairs, too high dissolves the small

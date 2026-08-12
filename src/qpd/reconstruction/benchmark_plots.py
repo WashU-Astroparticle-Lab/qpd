@@ -87,9 +87,8 @@ def plot_efficiency_vs_rate(
         Prepended to the legend labels. Use it when overlaying two sweeps on
         one axes -- e.g. comparing decoders.
     decorate : bool
-        Draw the reference lines, the measured-rate marker and the title. Set
-        False on the second and later calls of an overlay so they are not
-        stamped repeatedly.
+        Draw the reference line and the title. Set False on the second and
+        later calls of an overlay so they are not stamped repeatedly.
     **line_kwargs
         Forwarded to both ``errorbar`` calls. When two sweeps agree closely --
         which is what comparing decoders at good contrast looks like -- the
@@ -148,14 +147,11 @@ def plot_efficiency_vs_rate(
         f = reports[0].fidelity
         if decorate:
             ax.axhline(1.0, color="0.6", lw=0.7, zorder=0)
-            # The measured trace's own rate: the one point on this curve that
-            # is not a hypothetical.
-            ax.axvline(f.rate_hz, color="0.4", lw=0.9, ls=":", zorder=0)
-            # Annotate at the top: the curve starts flat at 1.0 on the left, so
-            # the bottom-left corner belongs to the legend.
-            ax.annotate(f"measured\n{f.rate_hz:.3g} Hz", xy=(f.rate_hz, 0.90),
-                        xytext=(4, 0), textcoords="offset points",
-                        fontsize="x-small", color="0.35", va="top")
+            # No "measured rate" marker. Three different rates can be quoted
+            # for one trace -- posterior-threshold crossings (`rate_hz`), the
+            # reported flip count, and the true rate those imply -- and a
+            # single labelled line on a true-rate axis cannot say which it is.
+            # `implied_rate_hz` returns the meaningful one on request.
             ax.set_title(title or
                          f"Flip detection vs background rate "
                          f"(contrast {f.contrast_median:.2f}, "
@@ -200,18 +196,8 @@ def plot_burst_efficiency(
         ax.axhline(1.0, color="0.6", lw=0.7, zorder=0)
         ax.axhline(0.5, color="0.85", lw=0.7, ls=":", zorder=0)
 
-        # Where the curve crosses 0.5 is the useful summary number: the burst
-        # size this reconstruction is half-sensitive to.
-        e, q = eff[order], n_qp[order]
-        cross = np.flatnonzero((e[:-1] < 0.5) & (e[1:] >= 0.5))
-        if cross.size:
-            i = int(cross[0])
-            span = e[i + 1] - e[i]
-            n50 = q[i] + (0.5 - e[i]) * (q[i + 1] - q[i]) / span if span else q[i]
-            ax.axvline(n50, color="C3", lw=0.9, ls="--", zorder=0)
-            ax.annotate(f"50% at {n50:.1f} qp", xy=(n50, 0.5),
-                        xytext=(5, -12), textcoords="offset points",
-                        fontsize="x-small", color="C3")
+        # The half-sensitivity point is a useful number but not a useful
+        # annotation -- see `burst_n50`, which returns it.
 
         ax.set_xscale("log")
         ax.set_xlabel("burst quasiparticle number (Poisson mean)")

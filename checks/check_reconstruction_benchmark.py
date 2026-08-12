@@ -33,6 +33,7 @@ Covers:
      is the whole point of the burst study.
  13. The three diagnostic figures render.
  14a. corrected_rate_hz survives a post-decode confidence cut.
+ 14c. No labelled markers on the figures; the numbers are functions instead.
  14b. Error-bar semantics: scatter vs precision-of-estimate, and that pooling
       weights trials by evidence rather than one-vote-each.
  14. The two decoding rules: identical at good contrast, and diverging in the
@@ -58,6 +59,7 @@ from qpd.reconstruction import (as_complex_trace,  # noqa: E402
                                 match_bursts, plot_burst_efficiency,
                                 plot_burst_multiplicity,
                                 plot_efficiency_vs_rate,
+                                implied_rate_hz, burst_n50,
                                 reconstruct_parity_flips_ramped,
                                 reconstruct_parity_flips_static, score_flips,
                                 sweep_burst_size, sweep_rate)
@@ -79,6 +81,10 @@ def raises(fn, *a, **kw):
     except (ValueError, TypeError):
         return True
     return False
+
+
+def _injected(rep):
+    return float(np.mean([t.rate_injected for t in rep.trials]))
 
 
 def ensemble(scn, static, n_seeds):
@@ -482,6 +488,58 @@ def main() -> int:
     check("...but leaves rate_hz (pre-cut, used to inject surrogates) alone",
           abs(f4.rate_hz - f0.rate_hz) < 1e-9,
           f"{f0.rate_hz:.2f} vs {f4.rate_hz:.2f} Hz")
+    # --- 14c. the numbers are functions, not annotations ---------------------
+    print("\n14c. Rate/threshold numbers are returned, not drawn")
+    trm = build_static_scenario(n_g=0.18, duration=5.0, sample_rate=1e4,
+                                tunnel_rate_hz=66.0).simulate(seed=1)
+    fcut = characterize_trace(trm.iq, 1e4, min_confidence=0.4)
+    swm = sweep_rate(fcut, [3, 10, 30, 100, 300, 1e3], n_trials=6)
+    # A single labelled line could not say which of three rates it meant, so
+    # there is no line; the meaningful one is computed on request.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as _plt
+    figs = [plot_efficiency_vs_rate(swm)[0],
+            plot_burst_efficiency(sweep_burst_size(fcut, [3, 8, 30],
+                                                   n_trials=2))[0]]
+    n_vlines = sum(len(a.get_lines()) for fg in figs for a in fg.axes)
+    check("the figures still render with no marker code left",
+          all(fg is not None for fg in figs) and n_vlines > 0)
+    _plt.close("all")
+    # The inversion must round-trip: push a known true rate through
+    # r * eff/pur and invert it back.
+    for target in (30.0, 100.0):
+        k = min(range(len(swm)),
+                key=lambda i: abs(_injected(swm[i]) - target))
+        r0 = _injected(swm[k])
+        forward = r0 * swm[k].efficiency_clustered[0] / swm[k].purity_clustered[0]
+        back = implied_rate_hz(swm, forward)
+        check(f"implied_rate_hz round-trips at {target:.0f} Hz",
+              np.isfinite(back) and abs(back / r0 - 1) < 0.15,
+              f"{r0:.1f} -> reported {forward:.1f} -> {back:.1f} Hz")
+    check("implied_rate_hz returns nan outside the swept range, not a guess",
+          not np.isfinite(implied_rate_hz(swm, 1e9)))
+    check("implied_rate_hz defaults to the measured reported count",
+          np.isfinite(implied_rate_hz(swm))
+          or fcut.n_flips / fcut.duration < _injected(swm[0]))
+    # Test the interpolation directly rather than through a slow sweep: at a
+    # 61 Hz background small bursts never reach 50%, and a curve that does not
+    # cross must give nan rather than a fabricated number.
+    from qpd.reconstruction import BurstSizePoint
+
+    def _pt(nq, eff):
+        return BurstSizePoint(n_qp_expected=nq, n_bursts=100,
+                              n_detected=int(round(100 * eff)),
+                              n_qp_true=np.zeros(0), n_qp_detected=np.zeros(0))
+
+    crossing = [_pt(2, 0.2), _pt(4, 0.4), _pt(8, 0.6), _pt(16, 0.9)]
+    b50 = burst_n50(crossing)          # crosses between 4 and 8: 4 + 0.1*4/0.2
+    check("burst_n50 interpolates the half-sensitivity multiplicity",
+          abs(b50 - 6.0) < 1e-9, f"{b50:.3f} qp (expected 6)")
+    check("burst_n50 is order-independent",
+          abs(burst_n50(list(reversed(crossing))) - b50) < 1e-9)
+    check("burst_n50 gives nan when the curve never reaches 50%",
+          not np.isfinite(burst_n50([_pt(2, 0.05), _pt(4, 0.2), _pt(8, 0.3)])))
 
     # --- 14b. error-bar semantics -------------------------------------------
     print("\n14b. Error bars: scatter vs precision of the estimate")
