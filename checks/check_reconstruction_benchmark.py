@@ -488,15 +488,29 @@ def main() -> int:
               f"pooled {big.purity_pooled[0]:.3f} vs mean-of-ratios "
               f"{big.purity[0]:.3f} (max n_pred {n_pred.max()}, "
               f"median {int(np.median(n_pred))})")
+    # The closed form and the bootstrap estimate the SAME quantity; agreeing
+    # is what licenses making the deterministic one the default.
+    cl, cle = big.purity_clustered
+    bo, boe = big.purity_bootstrap
+    check("closed-form and bootstrap agree on the point estimate",
+          abs(cl - bo) < 1e-12)
+    check("closed-form and bootstrap errors agree within 10%",
+          abs(cle - boe) < 0.10 * max(cle, boe),
+          f"clustered {cle:.5f} vs bootstrap {boe:.5f}")
+    check("the closed form needs no seed: it is deterministic",
+          big.purity_clustered == big.purity_clustered)
+    small_cl = small.purity_clustered[1]
+    check("closed-form error shrinks with n_trials",
+          cle < small_cl, f"{small_cl:.5f} -> {cle:.5f}")
     check("an unknown err= is rejected",
           raises(plot_efficiency_vs_rate, [big], err="nope"))
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as _plt
-    for kind in ("bootstrap", "binomial", "sd"):
+    for kind in ("clustered", "bootstrap", "binomial", "sd"):
         plot_efficiency_vs_rate([big], err=kind)
     _plt.close("all")
-    check("all three err= modes render", True)
+    check("all four err= modes render", True)
 
     # --- 14. decoding rule ---------------------------------------------------
     print("\n14. Viterbi vs forward-backward decoding")

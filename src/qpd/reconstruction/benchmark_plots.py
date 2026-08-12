@@ -52,7 +52,7 @@ def plot_efficiency_vs_rate(
     ax=None,
     label_prefix: str = "",
     decorate: bool = True,
-    err: str = "bootstrap",
+    err: str = "clustered",
     **line_kwargs,
 ):
     """Flip detection efficiency against background tunnelling rate.
@@ -65,13 +65,18 @@ def plot_efficiency_vs_rate(
         Also draw purity, which behaves quite differently: crowding destroys
         recall long before it costs precision, because the flips that are lost
         are lost silently rather than replaced by spurious ones.
-    err : {"bootstrap", "binomial", "sd"}
+    err : {"clustered", "bootstrap", "binomial", "sd"}
         Which uncertainty to draw, all on the same pooled ratio except "sd".
 
-        * ``"bootstrap"`` (default) resamples whole *trials*, so it improves
-          with ``n_trials`` and still respects the fact that a trial's events
-          are correlated -- a surrogate that segments noise fails a hundred
-          times at once, not a hundred independent times.
+        * ``"clustered"`` (default) is the closed-form delta-method variance of
+          a ratio of cluster totals. It improves with ``n_trials`` and respects
+          the fact that a trial's events are correlated -- a surrogate that
+          segments noise fails a hundred times at once, not a hundred
+          independent times -- with no resample count or seed to choose.
+        * ``"bootstrap"`` estimates the same quantity by resampling whole
+          trials. Agrees with ``"clustered"`` to 3-4 significant figures unless
+          a few trials dominate the totals; where they disagree, the
+          linearisation is the one to distrust.
         * ``"binomial"`` is the textbook interval on the pooled ratio. Cheaper
           to explain, but it treats pooled events as independent and is
           consequently too tight where trials are heterogeneous.
@@ -107,7 +112,8 @@ def plot_efficiency_vs_rate(
     reports = list(reports)
     if not reports:
         raise ValueError("no reports to plot")
-    keys = {"bootstrap": ("efficiency_bootstrap", "purity_bootstrap"),
+    keys = {"clustered": ("efficiency_clustered", "purity_clustered"),
+            "bootstrap": ("efficiency_bootstrap", "purity_bootstrap"),
             "binomial": ("efficiency_pooled", "purity_pooled"),
             "sd": ("efficiency", "purity")}
     if err not in keys:
