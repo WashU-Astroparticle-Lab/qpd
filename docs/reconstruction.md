@@ -1030,7 +1030,18 @@ The decoder misses flips and invents them, and the two do not cancel. Since
 $n_{\text{pred}} \cdot \rho / \epsilon \equiv n_{\text{truth}}$ identically for
 purity $\rho$ and efficiency $\epsilon$, the benchmark's job is exactly to
 supply those two numbers, and `corrected_rate_hz` applies them to the measured
-flip count. Where efficiency is near 1 this changes little; under burst
+flip count.
+
+**It uses the count the pipeline reported, not `fidelity.rate_hz`.** Those
+differ whenever a post-decode filter is in play: `rate_hz` comes from the HMM's
+`p_flip`, estimated *before* `min_confidence` drops anything, while efficiency
+and purity are measured on surrogates with the filter applied. Mixing them
+overstates the rate by the fraction the cut removes — measured at
+`min_confidence=0.4` on the reference device, +35% to +52% across six traces
+(mean absolute error 42%, against 4% using the reported count).
+
+`rate_hz` stays pre-cut deliberately: it is what the surrogates are *injected*
+at, and there the process rate is wanted, not the post-filter count. Where efficiency is near 1 this changes little; under burst
 crowding, where efficiency falls to 0.59, it is the difference between a rate
 and a number.
 

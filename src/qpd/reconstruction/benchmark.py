@@ -627,16 +627,31 @@ class BenchmarkReport:
         """Tunnelling rate implied by the measured flip count, de-biased.
 
         The decoder misses flips (efficiency < 1) and invents them (purity < 1),
-        and the two do not cancel. Correcting the measured count by
-        ``purity / efficiency`` is the point of running this benchmark:
-        :attr:`TraceFidelity.rate_hz` is what the decoder *reported*, this is
-        what it implies about the device.
+        and the two do not cancel. Since
+        ``n_pred * purity / efficiency == n_truth`` identically, applying the
+        benchmark's efficiency and purity to the flip count the pipeline
+        actually reported inverts that bias.
+
+        The count has to be the one the pipeline *output*, not
+        :attr:`TraceFidelity.rate_hz`. Those differ whenever a post-decode
+        filter is in play: ``rate_hz`` comes from the HMM's ``p_flip``, which
+        is estimated *before* ``min_confidence`` drops any flips, while
+        efficiency and purity are measured on surrogates with the filter
+        applied. Mixing them overstates the rate by the fraction the cut
+        removes -- measured on the reference device at ``min_confidence=0.4``,
+        that was +35% to +52% across six traces (mean absolute error 42%,
+        against 4% using the reported count).
+
+        The pooled efficiency and purity are used rather than the
+        mean-of-ratios, since this is an inversion of ratios of totals.
         """
-        eff, _ = self.efficiency
-        pur, _ = self.purity
-        if not (np.isfinite(eff) and np.isfinite(pur)) or eff <= 0:
+        eff, _ = self.efficiency_clustered
+        pur, _ = self.purity_clustered
+        duration = self.fidelity.duration
+        if (not (np.isfinite(eff) and np.isfinite(pur))
+                or eff <= 0 or duration <= 0):
             return float("nan")
-        return float(self.fidelity.rate_hz * pur / eff)
+        return float(self.fidelity.n_flips / duration * pur / eff)
 
     @property
     def closure(self) -> float:

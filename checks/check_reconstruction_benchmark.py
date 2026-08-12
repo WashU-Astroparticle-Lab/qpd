@@ -32,6 +32,7 @@ Covers:
  12. The rate and burst-size sweeps, including the multiplicity saturation that
      is the whole point of the burst study.
  13. The three diagnostic figures render.
+ 14a. corrected_rate_hz survives a post-decode confidence cut.
  14b. Error-bar semantics: scatter vs precision-of-estimate, and that pooling
       weights trials by evidence rather than one-vote-each.
  14. The two decoding rules: identical at good contrast, and diverging in the
@@ -450,6 +451,37 @@ def main() -> int:
         check("all three diagnostic figures render", False, repr(exc))
     check("an empty sweep is rejected rather than plotted",
           raises(plot_efficiency_vs_rate, []))
+
+    # --- 14a. corrected_rate_hz vs a confidence cut --------------------------
+    print("\n14a. corrected_rate_hz with a post-decode filter")
+    # `rate_hz` is the HMM's p_flip, estimated BEFORE min_confidence drops any
+    # flips, while efficiency and purity are measured with the filter applied.
+    # Building the correction on `rate_hz` therefore overstates the rate by the
+    # fraction the cut removes (measured: +42% mean absolute error at
+    # min_confidence=0.4). It has to use the count the pipeline reported.
+    for mc in (0.0, 0.4):
+        errs = []
+        for sd in range(4):
+            tr = build_static_scenario(n_g=0.18, duration=5.0, sample_rate=1e4,
+                                       tunnel_rate_hz=66.0).simulate(seed=sd)
+            kw = {"min_confidence": mc} if mc else {}
+            fd = characterize_trace(tr.iq, 1e4, **kw)
+            rp = benchmark_reconstruction(fidelity=fd, n_trials=12)
+            errs.append(rp.corrected_rate_hz / (tr.flip_times.size / 5.0) - 1)
+        m = float(np.mean(np.abs(errs)))
+        check(f"corrected_rate_hz recovers the true rate at min_confidence={mc}",
+              m < 0.15, f"mean |error| {100 * m:.1f}%")
+    # And the mechanism, directly: the cut must move the reported count while
+    # leaving the HMM's rate estimate alone.
+    tr = build_static_scenario(n_g=0.18, duration=5.0, sample_rate=1e4,
+                               tunnel_rate_hz=66.0).simulate(seed=1)
+    f0 = characterize_trace(tr.iq, 1e4)
+    f4 = characterize_trace(tr.iq, 1e4, min_confidence=0.4)
+    check("min_confidence reduces the reported flip count",
+          f4.n_flips < f0.n_flips, f"{f0.n_flips} -> {f4.n_flips}")
+    check("...but leaves rate_hz (pre-cut, used to inject surrogates) alone",
+          abs(f4.rate_hz - f0.rate_hz) < 1e-9,
+          f"{f0.rate_hz:.2f} vs {f4.rate_hz:.2f} Hz")
 
     # --- 14b. error-bar semantics -------------------------------------------
     print("\n14b. Error bars: scatter vs precision of the estimate")
