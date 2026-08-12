@@ -67,6 +67,7 @@ from qpd.reconstruction.hmm import (
     HMMResult,
     decode,
     decode_with_rate,
+    decoded_path,
     forward_backward,
     viterbi,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "HMMResult",
     "decode",
     "decode_with_rate",
+    "decoded_path",
     "forward_backward",
     "viterbi",
     # plotting

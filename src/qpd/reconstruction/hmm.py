@@ -38,8 +38,11 @@ __all__ = [
     "viterbi",
     "decode",
     "decode_with_rate",
+    "decoded_path",
     "forward_backward_reference",
 ]
+
+DECODERS = ("viterbi", "posterior")
 
 # Below this the flip prior is numerically indistinguishable from "never".
 _MIN_P = 1e-12
@@ -263,6 +266,40 @@ def decode_with_rate(
     res = HMMResult(posterior=post, path=path, log_likelihood=loglik, p_flip=p,
                     diagnostics={"p_flip_history": history})
     return res, p, history
+
+
+def decoded_path(result: HMMResult, decoder: str = "viterbi") -> np.ndarray:
+    """Branch sequence to read events off, under one of two decoding rules.
+
+    Both rules use the *same* fitted emissions and the same flip prior --
+    :func:`decode_with_rate` estimates the rate from the posterior either way
+    -- so choosing between them isolates the decoding step and nothing else.
+
+    ``"viterbi"``
+        The single most likely branch *sequence* (MAP path). It is a jointly
+        valid trajectory, and the transition prior is paid once per flip, so a
+        brief dip in the evidence does not create a flip *pair* unless it earns
+        its keep globally. Conservative: fewer, cleaner transitions.
+
+    ``"posterior"``
+        The per-sample marginal thresholded at 1/2 (MAP marginal, from
+        forward-backward). It maximises the expected number of correctly
+        labelled *samples*, which is a different objective -- and the resulting
+        sequence need not be a likely trajectory at all, since nothing couples
+        neighbouring decisions once the marginals are formed. It will follow a
+        short excursion that Viterbi smooths over, so it tends to recover more
+        real flips and also to invent more.
+
+    Which is better is an empirical question about the operating point, not a
+    matter of one dominating the other; see ``docs/reconstruction.md`` §12e and
+    ``notebooks/reconstruction_evaluation.ipynb``.
+    """
+    if decoder == "viterbi":
+        return np.asarray(result.path)
+    if decoder == "posterior":
+        return (np.asarray(result.posterior, dtype=float) > 0.5).astype(np.int8)
+    raise ValueError(
+        f"decoder must be one of {DECODERS}; got {decoder!r}")
 
 
 def forward_backward_reference(
