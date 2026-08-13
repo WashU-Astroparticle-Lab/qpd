@@ -262,6 +262,17 @@ This is the term that stops one noisy sample from being read as a flip: flipping
 "costs" a factor $p/(1-p)$ in probability, so the evidence has to be worth more
 than that.
 
+> **The 2×2 above is the pedagogical skeleton, not what production runs.**
+> Since burst-aware decoding became the default
+> (`burst_aware=True`, §12f), the constant-bias pipeline decodes a
+> **four-state** chain — parity ⊗ quiet/burst regime — whose transition
+> matrix is 4×4 with this $\mathbf{T}$ as its quiet-regime block. Everything
+> derived in this section survives unchanged: the recursions of §5.3 and §5.4
+> are written as sums and maxima over states $s$, so only the number of states
+> changes, not the algebra, and the cost stays $O(n)$. The 4×4 matrix itself
+> is displayed in §12f. Pass `burst_aware=False` to run the plain two-state
+> chain exactly as derived here.
+
 **(b) The emission model** (how a hidden state produces an observation).
 
 Given the branch, the sample is Gaussian about that branch's mean:
@@ -431,7 +442,8 @@ and normalising over the two states gives what we wanted:
 $$\gamma_k = \frac{\alpha_k(B)\beta_k(B)}{\alpha_k(A)\beta_k(A) + \alpha_k(B)\beta_k(B)}.$$
 
 Both recursions visit each sample once, so the cost is $O(n)$ — linear in the
-length of the trace, with only two states to track.
+length of the trace, with only a handful of states to track (two here; four in
+the burst-aware chain of §12f, with the same recursions verbatim).
 
 **Numerical care.** $\alpha_k$ shrinks geometrically and would underflow within a
 few hundred samples. The implementation rescales $\alpha$ to sum to 1 at every
@@ -845,6 +857,14 @@ The transition probability $p$ is itself unknown. It is estimated by **hard EM**
 The rate only sets the decoder's *prior*, so this crude scheme is adequate — a
 full Baum–Welch update would cost an extra sweep per iteration for no measurable
 gain. Measured recovery: 1 Hz → 1.0, 10 Hz → 9.2, 100 Hz → 98.8, 300 Hz → 292.7.
+
+Under the burst-aware default (§12f) the same hard-EM loop runs with one
+restriction: transitions are counted only on samples the current Viterbi path
+assigns to the **quiet** regime, and the count is divided by the quiet samples
+alone. The estimate — and the reported `rate_hz` — is therefore the
+*background* rate, no longer inflated by bursts (which the global two-state
+fit is: the burst-inflated value is kept in `diagnostics["p_global_seed"]`
+for comparison).
 
 ---
 
@@ -1451,7 +1471,28 @@ regime), so the fitted blob model of §6 is reused unchanged. The physics sits
 entirely in the transition matrix: parity flips at $p_\text{quiet}$ per sample
 in the quiet regime and $p_\text{burst}$ in the burst regime; the regime enters
 a burst with probability $\varepsilon$ per sample and leaves with
-$\Delta t/\tau_\text{burst}$.
+$\kappa = \Delta t/\tau_\text{burst}$.
+
+Written out, in the state order above and with $p_q \equiv p_\text{quiet}$,
+$p_b \equiv p_\text{burst}$, the 4×4 that replaces §5.2's $\mathbf{T}$ is
+
+$$\mathbf{T}_4 = \begin{pmatrix}
+(1-\varepsilon)(1-p_q) & (1-\varepsilon)\,p_q & \varepsilon(1-p_q) & \varepsilon\,p_q \cr
+(1-\varepsilon)\,p_q & (1-\varepsilon)(1-p_q) & \varepsilon\,p_q & \varepsilon(1-p_q) \cr
+\kappa(1-p_b) & \kappa\,p_b & (1-\kappa)(1-p_b) & (1-\kappa)\,p_b \cr
+\kappa\,p_b & \kappa(1-p_b) & (1-\kappa)\,p_b & (1-\kappa)(1-p_b)
+\end{pmatrix}.$$
+
+Each entry factorises into (regime move) × (parity move),
+$T_{(s,r)\to(s',r')} = R_{rr'}\, F^{(r)}_{ss'}$, with the parity flip
+probability taken from the **source** regime $r$ — so this is *not* a
+Kronecker product of two independent chains: the diagonal 2×2 blocks are
+§5.2's two-state matrix at the two different rates, and the off-diagonal
+blocks carry the regime switching. A flip coincident with regime entry is
+charged at the quiet rate, which costs at most one flip of evidence at the
+burst edge and keeps the factorisation exact. The recursions of §5.3 and §5.4
+run on this matrix unchanged, summing and maximising over four states instead
+of two.
 
 **The parameter budget.** Four numbers, none of which is a free fit:
 
