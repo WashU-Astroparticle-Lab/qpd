@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .burst_hmm import decode_burst_aware
 from .emission import validate_trace
 from .events import extract_flips
 from .hmm import decode_with_rate, decoded_path
@@ -268,6 +269,10 @@ def reconstruct_parity_flips_static(
     min_contrast: float = 1.5,
     model: StaticBlobModel | None = None,
     decoder: str = "viterbi",
+    burst_aware: bool = False,
+    burst_rate_hz: float = 1.0,
+    p_burst: float = 0.3,
+    burst_tau: float = 1e-3,
 ) -> StaticReconstructionResult:
     """Recover parity-flip times from a **fixed-offset-charge** trace, blind.
 
@@ -328,6 +333,24 @@ def reconstruct_parity_flips_static(
         step alone. See :func:`~qpd.reconstruction.hmm.decoded_path`, and
         ``notebooks/reconstruction_evaluation.ipynb`` for the measured
         comparison.
+    burst_aware : bool
+        Decode with the parity x regime chain of
+        :mod:`~qpd.reconstruction.burst_hmm` instead of the two-state HMM. The
+        global flip prior smooths quasiparticle bursts down to two or three
+        recovered flips regardless of their true size (issue #40); the
+        burst-aware chain gives burst windows their own flip probability, at
+        no change to background behaviour. The reported ``rate_hz`` then
+        refers to the *quiet* regime, i.e. it is the background rate no longer
+        inflated by the bursts.
+    burst_rate_hz : float
+        Expected burst occurrence rate [Hz], only used when ``burst_aware``.
+        Sets the regime entry prior; logarithmic sensitivity, so an order of
+        magnitude either way moves the burst detection threshold by about one
+        flip of evidence.
+    p_burst : float
+        Pinned per-sample flip probability inside a burst (not fitted).
+    burst_tau : float
+        Burst decay time [s]; sets the regime exit prior.
 
     Returns
     -------
@@ -384,10 +407,32 @@ def reconstruct_parity_flips_static(
             per_block.append(b)
         sigma = float(np.median(sigmas))
 
-    res, p, history = decode_with_rate(x, mu_a, mu_b, sigma, p_flip_init,
-                                       n_rate_iterations)
-    path = decoded_path(res, decoder)
-    times, conf = extract_flips(path, res.posterior, dt, t0=t0)
+    if burst_aware:
+        bres = decode_burst_aware(
+            x, mu_a, mu_b, sigma, dt, p_flip_init=p_flip_init,
+            n_iter=n_rate_iterations, p_burst=p_burst,
+            burst_rate_hz=burst_rate_hz, burst_tau=burst_tau)
+        p = bres.p_quiet
+        history = bres.diagnostics["p_quiet_history"]
+        posterior = bres.parity_posterior
+        viterbi_path = bres.parity_path
+        if decoder == "viterbi":
+            path = viterbi_path
+        elif decoder == "posterior":
+            path = (posterior > 0.5).astype(np.int8)
+        else:
+            raise ValueError(
+                f"decoder must be 'viterbi' or 'posterior'; got {decoder!r}")
+        loglik = bres.log_likelihood
+    else:
+        res, p, history = decode_with_rate(x, mu_a, mu_b, sigma, p_flip_init,
+                                           n_rate_iterations)
+        path = decoded_path(res, decoder)
+        posterior = res.posterior
+        viterbi_path = res.path
+        loglik = res.log_likelihood
+        bres = None
+    times, conf = extract_flips(path, posterior, dt, t0=t0)
     if min_confidence > 0:
         keep = conf >= min_confidence
         times, conf = times[keep], conf[keep]
@@ -417,20 +462,41 @@ def reconstruct_parity_flips_static(
     degenerate = bool(detectability < float(min_detectability)
                       and fitted.contrast < float(min_contrast))
 
+    extra = {}
+    if bres is not None:
+        # Contiguous burst-regime stretches of the Viterbi path, as time
+        # windows on the same axis as the flip times.
+        r = np.asarray(bres.regime_path)
+        edges = np.flatnonzero(np.diff(r) != 0) + 1
+        starts = np.r_[0, edges][np.r_[r[0], r[edges]] == 1]
+        ends = np.r_[edges, r.size][np.r_[r[0], r[edges]] == 1]
+        extra = {
+            "burst_aware": True,
+            "burst_posterior": bres.burst_posterior,
+            "regime_path": r,
+            "burst_windows": [(t0 + lo * dt, t0 + hi * dt)
+                              for lo, hi in zip(starts, ends)],
+            "p_quiet": bres.p_quiet,
+            "p_burst": bres.p_burst,
+            "epsilon": bres.diagnostics["epsilon"],
+            "p_global_seed": bres.diagnostics["p_global_seed"],
+        }
+
     return StaticReconstructionResult(
         flip_times=times,
         confidence=conf,
-        posterior=res.posterior,
+        posterior=posterior,
         branch=path,
         model=fitted,
         p_flip=p,
         diagnostics={
             "decoder": decoder,
-            "viterbi_path": res.path,
+            "viterbi_path": viterbi_path,
             "rate_hz": p / dt,
             "p_flip_history": history,
             "n_flips": int(times.size),
-            "log_likelihood": res.log_likelihood,
+            "log_likelihood": loglik,
+            **extra,
             "contrast": fitted.contrast,
             "separation": fitted.separation,
             "sigma": sigma,

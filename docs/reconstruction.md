@@ -33,6 +33,7 @@ the statistical machinery is built up from scratch in [§5](#5-the-hidden-markov
 12c. [Efficiency and accuracy on measured data, by surrogate replay](#12c-efficiency-and-accuracy-on-measured-data-by-surrogate-replay)
 12d. [Diagnostics: rate response and burst response](#12d-diagnostics-rate-response-and-burst-response)
 12e. [Viterbi or forward-backward?](#12e-viterbi-or-forward-backward)
+12f. [Burst-aware decoding: the parity × regime HMM](#12f-burst-aware-decoding-the-parity--regime-hmm)
 13. [What sets the limits](#13-what-sets-the-limits)
 13b. [Knowing when it will not work](#13b-knowing-when-it-will-not-work)
 14. [Reproducing the numbers](#14-reproducing-the-numbers)
@@ -1424,6 +1425,90 @@ reset-comb search stays on Viterbi so the nuisance model a trace gets does not
 depend on the caller's choice.
 
 `notebooks/reconstruction_evaluation.ipynb` runs all of this end to end.
+
+---
+
+## 12f. Burst-aware decoding: the parity × regime HMM
+
+The two-state chain of §5 fits **one** flip probability to the whole trace. For
+the Poisson background that is the right model; for a quasiparticle burst it is
+badly wrong, and wrong in a way no amount of evidence per flip repairs: a burst
+is a local excursion of the tunnelling rate by ~3 orders of magnitude, the
+background dwell dominates the rate fit, and Viterbi then charges
+$\ln((1-p)/p) \approx 6$ nats for every in-burst toggle. The result is the flat
+multiplicity curve of §12d — recovered counts pinned near the cluster threshold
+(≈ 3–4) regardless of the true burst size.
+
+`burst_aware=True` on `reconstruct_parity_flips_static` replaces the two-state
+chain with four states — parity ⊗ regime:
+
+$$(A,\text{quiet}),\quad (B,\text{quiet}),\quad (A,\text{burst}),\quad (B,\text{burst}).$$
+
+Emissions depend on parity alone (the readout sees the branch, never the
+regime), so the fitted blob model of §6 is reused unchanged. The physics sits
+entirely in the transition matrix: parity flips at $p_\text{quiet}$ per sample
+in the quiet regime and $p_\text{burst}$ in the burst regime; the regime enters
+a burst with probability $\varepsilon$ per sample and leaves with
+$\Delta t/\tau_\text{burst}$.
+
+**The parameter budget.** Four numbers, none of which is a free fit:
+
+| parameter | set by | default |
+|---|---|---|
+| $p_\text{quiet}$ | hard-EM on the trace, counting only quiet-regime transitions | fitted |
+| $p_\text{burst}$ | **pinned** — EM would drive it to ½, turning the burst regime into a "don't care" state that absorbs noise | 0.3 |
+| $\tau_\text{burst}$ | quasiparticle decay physics | 1 ms |
+| $\varepsilon$ | `burst_rate_hz` $\times\ \Delta t$ | 1 Hz |
+
+$\varepsilon$ looks like an assumed burst rate and is not: it enters the decode
+once per burst as an entry cost of $\ln(1/\varepsilon)$ nats, against evidence
+of $\sim\ln(p_\text{burst}/p_\text{quiet}) \approx 5$ nats *per recovered
+flip*. A factor of 100 either way in `burst_rate_hz` therefore moves the
+detection threshold by about one flip (measured: 6.9 → 8.4 recovered at
+$n_\text{qp}\sim 20$ across 0.1 → 10 Hz). It is a false-alarm threshold in the
+same sense as the scan statistic's p-value gate in §12d, which remains the
+reported significance either way.
+
+A useful side effect: because bursts are explained by their own regime,
+$p_\text{quiet}$ — and hence the reported `rate_hz` — is the **background**
+rate, no longer inflated by the bursts (the global fit's estimate is kept in
+`diagnostics["p_global_seed"]` for comparison). The decoder also returns a
+per-sample burst-regime posterior and the Viterbi regime windows
+(`diagnostics["burst_posterior"]`, `["burst_windows"]`), so burst *detection*
+becomes model-based rather than purely post-hoc clustering — though
+`detect_bursts` and its p-value still run downstream unchanged.
+
+**Measured, before → after** (10 kSa/s, contrast 2.4, 17 Hz background,
+$\tau = 1$ ms; `checks/study_burst_aware_comparison.py`):
+
+| $n_\text{qp}$ (true) | visible on grid | recovered in window, before | after |
+|---|---|---|---|
+| 8.7 | 6.7 | 2.5 | **3.7** |
+| 20.6 | 12.6 | 2.9 | **7.9** |
+| 82.1 | 20.3 | 4.1 | **14.9** |
+
+The "visible" column is the aliasing ceiling of §12d — transitions that survive
+re-sampling the true flip train on the acquisition grid — and no decoder can
+beat it. The residual gap to that ceiling is evidence-limited, not
+prior-limited: at $n_\text{qp} = 20$ the mean intra-burst dwell is ~1.4
+samples, carrying $C^2/2 \approx 2.9$ nats against an entry+exit cost of ~1.7
+nats even at $p_\text{burst} = 0.3$, so noise erases a fraction of the
+one-sample dwells whatever the prior says.
+
+Burst detection efficiency moves with it (defaults, no p-value gate): 0.55 →
+0.68 at $n_\text{qp} = 20$ and 0.67 → **0.98** at 80 — the baseline's
+high-multiplicity *dip* (crowding cancels so many flips that the cluster
+threshold fails) disappears. The guards, measured on the same footing: pure
+background flip efficiency 0.980/0.980 and purity 0.996/0.995 (unchanged), no
+false bursts beyond the background's own coincidences, and the improvement
+survives a `min_confidence=0.4` cut (7.7 vs 7.9 at $n_\text{qp} = 20$).
+
+![before/after comparison](figures/burst_aware_comparison.png)
+
+The gates live in `checks/check_burst_aware_hmm.py`. The remaining distance to
+truth at large $n_\text{qp}$ is a *counting* limitation — sub-sample dwells
+cancel in the parity — and closing it means estimating the in-window rate
+rather than enumerating flips; that is the follow-up in issue #40.
 
 ---
 

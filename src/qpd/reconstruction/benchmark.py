@@ -1305,6 +1305,7 @@ _RECON_KEYS = frozenset({
     "min_detectability", "min_contrast", "model", "emission",
     "segment_charge_jumps", "model_ramp_resets", "ramp_period",
     "n_profile_windows", "n_segment_iterations", "decoder",
+    "burst_aware", "burst_rate_hz", "p_burst", "burst_tau",
 })
 
 

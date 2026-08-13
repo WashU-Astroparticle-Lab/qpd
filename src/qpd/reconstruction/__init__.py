@@ -51,6 +51,10 @@ from qpd.reconstruction.benchmark_plots import (
     plot_burst_multiplicity,
     plot_efficiency_vs_rate,
 )
+from qpd.reconstruction.burst_hmm import (
+    BurstAwareResult,
+    decode_burst_aware,
+)
 from qpd.reconstruction.bursts import (
     BurstMatch,
     DetectedBurst,
@@ -127,6 +131,9 @@ __all__ = [
     "BenchmarkReport",
     "BenchmarkTrial",
     "as_complex_trace",
+    # burst-aware decoding
+    "decode_burst_aware",
+    "BurstAwareResult",
     # burst finding and burst-level diagnostics
     "detect_bursts",
     "match_bursts",
