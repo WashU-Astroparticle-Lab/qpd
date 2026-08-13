@@ -34,6 +34,7 @@ the statistical machinery is built up from scratch in [§5](#5-the-hidden-markov
 12d. [Diagnostics: rate response and burst response](#12d-diagnostics-rate-response-and-burst-response)
 12e. [Viterbi or forward-backward?](#12e-viterbi-or-forward-backward)
 12f. [Burst-aware decoding: the parity × regime HMM](#12f-burst-aware-decoding-the-parity--regime-hmm)
+12g. [Charge jumps at constant bias: detect, segment, or declare dead time](#12g-charge-jumps-at-constant-bias-detect-segment-or-declare-dead-time)
 13. [What sets the limits](#13-what-sets-the-limits)
 13b. [Knowing when it will not work](#13b-knowing-when-it-will-not-work)
 14. [Reproducing the numbers](#14-reproducing-the-numbers)
@@ -841,6 +842,11 @@ branch onto the other — the same degeneracy as a ramp reset, but occurring at 
 random time, so the periodicity argument of §8 does not apply. It is reported as
 a flip. This is a genuine limit of the measurement, not of the algorithm.
 
+Everything above is the *ramped* story, where a jump is a phase nuisance. At
+**constant bias** a jump is a different and nastier animal — it moves the blobs
+themselves, possibly onto the parity-blind charge — and gets its own machinery;
+see §12g.
+
 ---
 
 ## 10. Estimating the tunnelling rate
@@ -1569,6 +1575,189 @@ rather than enumerating flips; that is the follow-up in issue #40.
 
 ---
 
+## 12g. Charge jumps at constant bias: detect, segment, or declare dead time
+
+§9 handled offset-charge jumps under a *sweep*, where a jump only shifts the
+ramp phase. At **constant bias** the same physical event is qualitatively
+worse: the two blobs are wherever $n_g$ put them, so a jump moves both centres
+outright — including, possibly, onto the parity-blind charge. And the trigger
+is correlated with the signal: the impact events a burst search hunts for
+reconfigure the offset charge *and* release quasiparticles, so the decoder
+used to be most likely to fail exactly during the events of interest
+(issue #44).
+
+The machinery below (`segment_charge_jumps=True`) is **opt-in, off by
+default** — not because it fails on the problem it was built for (every gate
+below passes), but because measured devices also contain things it detects
+*correctly* that are not discrete charge jumps; see the last subsection.
+
+**Measured damage** (reference static scenario, $n_g = 0.18$, 10 kSa/s, 17 Hz
+background, one jump of amplitude $\delta$ at mid-trace, decoded with a single
+stationary blob model):
+
+* A landing near the blind charge is a *silent* kill: at $\delta = 0.07$
+  ($n_g' = 0.25$) the flip $F_1$ collapses 0.95 → **0.30** and the reported
+  rate inflates 16 → **40 Hz**, while the global `degenerate` flag stays
+  green — whole-trace contrast still looks fine (a §13b-class failure).
+* A coincident burst is starved: with an $n_{\rm qp} \sim 20$ burst at the
+  jump time, in-window recovery drops 3.1 → **1.9** flips at $\delta = 0.10$.
+* Large jumps at this geometry are surprisingly benign for $F_1$ (the pair
+  midpoint barely moves; the *separation* is what changes), which is exactly
+  what makes the harmful band $\delta \in [0.05, 0.10]$ dangerous: nothing
+  about the trace advertises the failure.
+
+### The detector: a screen that proposes, an HMM that decides
+
+Detection is blind and two-stage
+(`qpd.reconstruction.charge_events.detect_charge_events`), and both stages
+exist because the obvious single-stage statistics failed measurably:
+
+1. **Screen** — recursive split scan on nearest-centre distortion: at each
+   candidate boundary, how much distortion do freshly fitted side pairs
+   remove relative to the best single pair for the interval? This cannot
+   compare against the global fit alone (a global fit across a jump smears
+   toward a compromise and the misfit plateaus symmetrically — no step), and
+   it cannot be *trusted* either: branch occupancy is correlated over whole
+   dwells, and at moderate contrast any per-side refitted statistic converts
+   occupancy fluctuation into fake evidence — measured at hundreds of nats on
+   perfectly clean telegraphs, for the mixture likelihood (even with the
+   weight pinned) and for the distortion alike. The screen is therefore only
+   a cheap, complete *proposer*, run on a decimated trace.
+2. **Verify** — a local HMM likelihood ratio around each candidate: emission
+   means switching at the boundary (each side's own pair, fitted by soft-EM
+   *under the telegraph prior*) against one pair for the whole window. The
+   HMM prices a lopsided stretch of dwells as expected behaviour, not
+   evidence, so occupancy-faked candidates score ~0 nats while a genuine
+   change of blob geometry keeps its full evidence.
+3. **Localize and prune** — accepted boundaries are placed by a
+   coarse-to-fine search on the HMM marginal itself. This too was forced:
+   every *per-sample* scoring rule tried (nearest-centre distance,
+   equal-weight mixture density) picks the wrong side when the two pairs
+   differ in separation — spread centres score better distortion on
+   overlapping data, and the mixture's half-weights penalize the wide pair —
+   so a refinement walk under either can run downhill *away* from the true
+   change point, feeding its own side-pair contamination. Each boundary
+   must then survive a sharpness floor (displacing the switch index by 1/8
+   window must cost ≥ 5 nats — this rejects misplaced straddlers, which
+   score ~1) and a final re-verification with the window clipped to its
+   surviving *neighbours*. The sharpness floor applies only between two
+   *healthy* pairs: for a transition into a near-blind configuration,
+   displacement into the degenerate side is intrinsically free (measured
+   sharpness ~0 at a genuine blind landing under a coincident burst), so
+   there the floor is skipped rather than allowed to veto exactly the event
+   the detector most needs to catch.
+
+The acceptance threshold (15 nats) is validated against the measured null:
+over 50 jump-free physics traces the largest gain the verifier ever saw was
+**6.2 nats** (p95 4.4), with zero boundaries accepted. Boundary localization
+is a few samples for a well-detected jump. Two honest limits: stretches
+shorter than a few hundred samples at the trace edges sit below sensitivity,
+and the exact mirror $\delta = \pm 0.5$ is invisible *in principle* —
+$\chi_{\rm odd}(n_g) = \chi_{\rm even}(n_g + \tfrac12)$, so the blob pair
+maps onto itself and the trace distribution is unchanged; the cost is at most
+one flip at the jump time (same limit as the ramped $\delta = \pm 0.5$).
+
+### After a boundary: refit, and never fall back
+
+Each segment between verified boundaries is refit
+(`fit_two_blobs`), re-expressed on the global projection axis (jump motion is
+along the S21 curve; the axis rotation is $\le 0.2°$ at the reference
+geometry), and the whole trace is decoded in **one** HMM pass with per-sample
+means — the same machinery `segment_blocks` uses, whose equal-width grid the
+detected boundaries supersede. Flips within `boundary_guard_samples` of a
+boundary are dropped: branch identity does not survive a jump (a
+tunnelling-induced jump *does* flip the parity, but the flip cannot be counted
+honestly).
+
+A segment whose refit fails is **dead time**, never a global-fit fallback —
+after a jump the global centres are exactly the wrong answer. The dead test
+targets the toggle-collapse signature: a blind landing makes the decoder
+toggle, collapsing the decoded dwell and with it
+$C\sqrt{\text{dwell}}$ — measured **6.8** at the blind landing against
+**15.8** at the nearest marginal-but-decodable bias, split at 12, with the
+`min_contrast` condition keeping the fast-telegraph exemption. A *marginal*
+segment is decoded and reported (the same flag-but-return semantics as the
+global `degenerate` flag); only the disaster case is masked. Dead samples get
+equalized means (no parity evidence → the burst-aware chain coasts on its
+transition prior instead of fabricating one long "burst") and are excluded
+from the quiet-rate hard-EM via a `live` mask, so `rate_hz` refers to live
+time. `dead_windows` and `live_fraction` say exactly what was given up.
+
+### Measured before/after
+
+Same operating point, `segment_charge_jumps` off/on
+(`checks/study_charge_event_static.py`):
+
+| $\delta$ | $n_g'$ | $F_1$ before | $F_1$ after | rate before | rate after |
+|---|---|---|---|---|---|
+| 0.02 | 0.20 | 0.91 | 0.91 | 15.9 | 15.9 |
+| 0.05 | 0.23 | 0.62 | 0.65 | 17.9 | 16.3 |
+| 0.07 | 0.25 | 0.30 | **0.58** | 39.5 | **18.4** |
+| 0.10 | 0.28 | 0.76 | 0.77 | 16.0 | 15.8 |
+| 0.20 | 0.38 | 0.96 | 0.97 | 16.4 | 16.3 |
+| 0.50 | 0.68 | 0.94 | 0.94 | 16.1 | 16.1 |
+
+At the blind landing the after-$F_1$ is capped near 0.55 *by construction* —
+half the trace is genuinely unrecoverable — but the recovery is now split
+honestly: pre-jump flips decode at their usual $F_1 \gtrsim 0.9$, the
+post-jump half is declared dead, and the rate is no longer fabricated. The
+coincident-burst case recovers 11.4 in-window flips at $\delta = 0.20$ (10.4
+before, 3.1 with no jump at all -- the post-jump contrast is higher); at a blind landing the multiplicity is unrecoverable in any
+decoder, and what the upgrade adds is the *declaration* — the charge event is
+timestamped, the dead window reported, and
+`flag_charge_coincidences` marks any detected burst overlapping a charge
+event: for an impact search that label ("parity activity at a charge
+reconfiguration") is a physics category, not a discard.
+
+On a trace with no verified event the decode is bit-identical to
+`segment_charge_jumps=False`. The gates live in
+`checks/check_charge_event_static.py`.
+
+### Why it is off by default: what a real device adds
+
+Everything above holds in a world where the emission model is
+piecewise-constant between rare discrete jumps — the world of the physics
+simulations, where the detector's null is spotless (0 boundaries in 50 clean
+traces, largest verification gain 6.2 vs threshold 15). Running the same
+detector over the reference measured dataset (1 s LED-calibration chunks at
+10 kSa/s) surfaced two model violations that are *detections, not false
+positives* — the trace genuinely does what the detector says — but are not
+offset-charge jumps:
+
+* **The LED comb.** Detected events on the LED dataset lock onto the 60 ms
+  flash period (0.096, 0.156, 0.276, 0.396, 0.516 … s across independent
+  chunks, at formally enormous significance). Each flash is a genuine sharp
+  step-and-recover of the emission model — instantaneous turn-on, so it
+  passes any step detector honestly. Segmenting on the calibration comb
+  would shred exactly the dataset the burst search runs on.
+* **Dispersive wander.** The along-axis noise exceeds the minor-axis noise
+  by ~1.4× on measured chunks: the branch means wander by a few tenths of a
+  sigma on ~100 ms scales. Physically this is 1/f charge noise — which *is*
+  a dense train of micro-jumps (TLS flips), so "step versus wander" is an
+  amplitude distinction, not a kind distinction, and at thresholds low
+  enough to catch a blind landing the detector also resolves the upper tail
+  of the micro-jump bath. Three discriminators were built and measured
+  before concluding this: a linear-drift null (absorbs symmetric separation
+  changes and kills real jumps), localization width (wander is locally
+  rough, so its fakes localize sharply too), and boundary sharpness (helps —
+  it is part of the verifier — but the margin against Brownian-type wander
+  is thin).
+
+Two mitigations ship anyway: the noise scale for all detection statistics is
+the robust first-difference width along the axis (immune to wander and to
+the jump itself), and more than 3 accepted events per trace abandons
+segmentation outright with
+`diagnostics["charge_segmentation_abandoned"] = True` — a physical jump rate
+of ~0.1 Hz makes a handful per second a model violation, not a discovery.
+
+Use `segment_charge_jumps=True` on dark data at a stable bias, or on a
+specific suspected trace — and read `charge_event_times`, `dead_windows`
+and `live_fraction` before trusting the output. Closing the gap for pulsed
+datasets (masking hardware-known flash windows) and for the wander bath
+(damage-calibrated amplitude floors) is the open item on issue #44.
+
+---
+
 ## 13. What sets the limits
 
 **(a) Contrast.** Everything is governed by $C = |h|/\sigma$. Measured on the
@@ -1663,6 +1852,17 @@ phase grid*: when the fold period is commensurate with the sample period the
 grid visits only $P/\Delta t$ distinct phases, most bins are empty, and the sign
 schedule would otherwise be anchored on an empty bin. The bin count is shrunk
 until every bin is populated.
+
+Under a constant bias there is one more silent failure worth knowing: an
+offset-charge jump mid-trace poisons the decode from the jump onward while
+the *global* `degenerate` flag stays green (the whole-trace contrast still
+looks fine). The static path can detect such events, refit per segment, and
+report unusable stretches as dead time (`diagnostics["dead_windows"]`,
+`live_fraction`) — opt-in via `segment_charge_jumps=True`; §12g explains
+both the machinery and why it is not on by default. When it is on, check
+`charge_jump_times` before interpreting a burst near a boundary, and
+remember that a `live_fraction` below 1 means the quoted rate refers to the
+live time only.
 
 One asymmetry worth internalising: **a wrong model fails quietly, not loudly.**
 Every failure mode above produced tens of thousands of fabricated events with

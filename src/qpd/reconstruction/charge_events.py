@@ -40,14 +40,16 @@ of measured failures of the single-stage alternatives:
   ratio is insensitive to the exact ``p_flip`` used, since both hypotheses
   share the transition prior.
 
-The distortion and the emissions are normalized by the *minor-axis* sigma of
-the global fit, not its EM width: the EM sigma of a jumped trace is inflated
-by the very smear being tested for, deflating the statistic exactly when it
-matters, while the minor-axis width is orthogonal to blob motion and stays
-clean. The acceptance threshold ``min_gain_nats`` applies to the verifier's
-likelihood ratio (2 extra fitted means, plus a trials term for the screen)
-and is validated against the measured jump-free null in
-``checks/study_charge_event_static.py`` rather than derived from an
+The distortion and the emissions are normalized by the robust
+first-difference width of the projected trace, not by a fitted width: the EM
+sigma of a jumped trace is inflated by the very smear being tested for, and
+the minor-axis sigma understates anisotropic receiver noise (measured 1.38x
+smaller than the along-axis noise on the reference dataset, which would
+inflate every gain ~2x). First differences see neither slow wander nor the
+jump itself, and the median ignores the rare telegraph steps. The acceptance
+thresholds (``min_gain_nats`` on the verifier's likelihood ratio, plus the
+boundary-sharpness floor) are validated against the measured jump-free null
+in ``checks/study_charge_event_static.py`` rather than derived from an
 independence assumption the telegraph does not satisfy.
 
 One case is irreducible: ``delta = +/-0.5`` (mod 1). ``chi_odd(n_g) =
@@ -84,7 +86,7 @@ __all__ = ["ChargeEventDiagnostics", "detect_charge_events"]
 # always use the full-resolution data.
 _SCREEN_SAMPLES = 65536
 # Cap the candidate grid per interval; localization below the resulting
-# stride is recovered by the misfit refinement step.
+# stride is recovered by the HMM-marginal refinement step.
 _MAX_CANDIDATES = 64
 # Screening floor (distortion units) and how many of an interval's local
 # maxima get a verification attempt. The floor only has to reject obvious
@@ -95,6 +97,18 @@ _MAX_CANDIDATES = 64
 # cheaper than trusting the ranking.
 _SCREEN_FLOOR = 25.0
 _SCREEN_TRIES = 16
+# Minimum sharpness (nats lost by displacing the switch index by 1/8 of the
+# verification window) for an accepted boundary; see _sharpness. The floor's
+# proven job is rejecting misplaced straddlers (measured ~1 nat against >= 9
+# for a well-placed boundary). It only applies between two *healthy* pairs:
+# for a transition into a near-blind configuration (side separation below
+# _BLIND_SEPARATION sigma) displacement into the degenerate side is
+# intrinsically free -- measured sharpness ~0 at a genuine blind landing
+# under a coincident burst, and EM fits a spurious ~1 sigma pair even at a
+# truly blind point -- so the floor would reject exactly the event
+# the detector most needs to catch, and is skipped.
+_MIN_SHARPNESS = 5.0
+_BLIND_SEPARATION = 1.3
 # Closest a candidate boundary may sit to an interval end. A foreign stretch
 # shorter than this is undetectable against the noise and harmless to the
 # decode.
@@ -147,26 +161,6 @@ def _fit_pair(x: np.ndarray, sigma: float,
     return mu_a, mu_b, -0.5 * j / (sigma * sigma)
 
 
-def _pair_nll(x: np.ndarray, mu_a: float, mu_b: float,
-              sigma: float) -> np.ndarray:
-    """Per-sample negative log-likelihood under a fixed equal-weight pair.
-
-    Parity-blind (both means are allowed) so parity flips and burst-rate
-    toggling leave it flat, and occupancy-independent because the pair is
-    fixed, not refitted. Crucially this is a *proper scoring rule*, which
-    plain nearest-centre distance is not: two spread-out centres score
-    better distortion on overlapping data than the true narrow pair (the
-    spread catches the tails), so a distance-based comparison between pairs
-    of different separations picks the wrong one -- measured as boundary
-    refinement sliding to the window edge on a separation-shrink jump. The
-    log-density has no such failure. Constant terms (same sigma for both
-    pairs) are dropped.
-    """
-    inv = 0.5 / (sigma * sigma)
-    da = (x - mu_a) ** 2
-    db = (x - mu_b) ** 2
-    m = np.minimum(da, db)
-    return m * inv - np.log(0.5 * (1.0 + np.exp(-np.abs(da - db) * inv)))
 
 
 def _hmm_loglik(x: np.ndarray, mu_a, mu_b, sigma: float,
@@ -204,6 +198,17 @@ def _hmm_pair(x: np.ndarray, sigma: float, p_flip: float,
     return mu_a, mu_b, _hmm_loglik(x, mu_a, mu_b, sigma, p_flip)
 
 
+def _split_loglik(x: np.ndarray, w_lo: int, w_hi: int, b: int,
+                  left: tuple[float, float], right: tuple[float, float],
+                  sigma: float, p_flip: float) -> float:
+    """Joint HMM likelihood of a window whose pair switches at ``b``."""
+    n_l = b - w_lo
+    n_r = w_hi - b
+    mu_a = np.concatenate([np.full(n_l, left[0]), np.full(n_r, right[0])])
+    mu_b = np.concatenate([np.full(n_l, left[1]), np.full(n_r, right[1])])
+    return _hmm_loglik(x[w_lo:w_hi], mu_a, mu_b, sigma, p_flip)
+
+
 def _verify_candidate(x: np.ndarray, sigma: float, b: int, lo: int, hi: int,
                       window: int, p_flip: float,
                       init: tuple[float, float]
@@ -222,38 +227,94 @@ def _verify_candidate(x: np.ndarray, sigma: float, b: int, lo: int, hi: int,
     w_hi = min(hi, b + window)
     if b - w_lo < 16 or w_hi - b < 16:
         return -np.inf, init, init
-    sa, sb, ll_single = _hmm_pair(x[w_lo:w_hi], sigma, p_flip, *init)
+    xs = x[w_lo:w_hi]
+    sa, sb, ll_single = _hmm_pair(xs, sigma, p_flip, *init)
     la, lb, ll_l = _hmm_pair(x[w_lo:b], sigma, p_flip, sa, sb)
     ra, rb, ll_r = _hmm_pair(x[b:w_hi], sigma, p_flip, sa, sb)
     # The split model's likelihood is evaluated jointly (one chain, means
     # switching at b) so the two hypotheses integrate over the same paths.
-    n_l = b - w_lo
-    n_r = w_hi - b
-    mu_a = np.concatenate([np.full(n_l, la), np.full(n_r, ra)])
-    mu_b = np.concatenate([np.full(n_l, lb), np.full(n_r, rb)])
-    ll_split = _hmm_loglik(x[w_lo:w_hi], mu_a, mu_b, sigma, p_flip)
+    ll_split = _split_loglik(x, w_lo, w_hi, b, (la, lb), (ra, rb), sigma,
+                             p_flip)
     return ll_split - ll_single, (la, lb), (ra, rb)
 
 
-def _refine_boundary(x: np.ndarray, sigma: float, lo: int, hi: int,
-                     left: tuple[float, float], right: tuple[float, float],
-                     ) -> tuple[int, float]:
-    """Exact change-point inside ``[lo, hi)`` by cumulative pair likelihood.
+def _sharpness(x: np.ndarray, sigma: float, b: int, lo: int, hi: int,
+               window: int, p_flip: float, left: tuple[float, float],
+               right: tuple[float, float], shift: int) -> float:
+    """Likelihood cost of moving the switch index off the boundary.
 
-    Returns the boundary and an approximate 1-sigma localization width: the
-    half-width of the region where the switching cost stays within 2 nats
-    of its minimum. Small jumps localize poorly (the cost trough is flat)
-    and the width says so.
+    This is what separates a charge *event* from slow mean wander on
+    measured traces, and it is a statement about time-scale, not shape: a
+    jump is complete within one sample, so with the side pairs held fixed,
+    displacing the switch by ``shift`` mis-models every sample in between
+    and costs real likelihood. Wander builds the same split evidence
+    gradually and is near-indifferent to where the cut is placed -- measured
+    on synthetic wandering-mean traces, likelihood-ratio fakes of hundreds
+    of nats carry a sharpness of only a few. (A linear-drift null was tried
+    instead and failed in both directions: a symmetric separation change is
+    absorbed by linearly converging means, killing real jumps, while
+    random-walk wander is curvier than a line and still fired it.)
     """
-    xs = x[lo:hi]
-    ma = _pair_nll(xs, left[0], left[1], sigma)
-    mb = _pair_nll(xs, right[0], right[1], sigma)
-    total = np.concatenate(([0.0], np.cumsum(ma))) + (
-        np.sum(mb) - np.concatenate(([0.0], np.cumsum(mb)))
-    )
-    k = int(np.argmin(total))
-    width = 0.5 * np.count_nonzero(total <= total[k] + 2.0)
-    return lo + k, float(max(width, 0.5))
+    w_lo = max(lo, b - window)
+    w_hi = min(hi, b + window)
+    s = min(int(shift), (b - w_lo) // 2, (w_hi - b) // 2)
+    if s < 8:
+        return np.inf  # too close to an edge to test; rely on the gain
+    ll_b = _split_loglik(x, w_lo, w_hi, b, left, right, sigma, p_flip)
+    ll_s = max(
+        _split_loglik(x, w_lo, w_hi, b - s, left, right, sigma, p_flip),
+        _split_loglik(x, w_lo, w_hi, b + s, left, right, sigma, p_flip))
+    return ll_b - ll_s
+
+
+def _refine_hmm(x: np.ndarray, sigma: float, lo: int, hi: int, b0: int,
+                window: int, p_flip: float, left: tuple[float, float],
+                right: tuple[float, float]
+                ) -> tuple[int, float, tuple[float, float],
+                           tuple[float, float]]:
+    """Localize a boundary by coarse-to-fine search on the HMM marginal.
+
+    Maximizes the joint switch-at-b likelihood over a shrinking grid of
+    switch indices, refitting the side pairs between stages. Localization
+    must go through the HMM: every per-sample scoring rule tried here
+    failed on pairs of *different separations* -- nearest-centre distortion
+    rewards spread centres on overlapping data, and the equal-weight mixture
+    density penalizes a wide pair by its half-weights, so an
+    alternating walk under either statistic can run downhill *away* from
+    the true change point, feeding its own side-pair contamination. The
+    marginal likelihood adapts the path per hypothesis and has neither
+    pathology.
+
+    Returns ``(boundary, localization width [samples], left, right)``; the
+    width is the half-extent of grid points within 2 nats of the maximum at
+    the finest stage, so a shallow optimum (a small jump) reports itself.
+    """
+    width = float(window)
+    radius = int(window)
+    for _ in range(4):
+        w_lo = max(lo, b0 - window)
+        w_hi = min(hi, b0 + window)
+        lo_b = max(w_lo + 16, b0 - radius)
+        hi_b = min(w_hi - 16, b0 + radius)
+        if hi_b <= lo_b:
+            break
+        bs = np.unique(np.linspace(lo_b, hi_b, 17).astype(int))
+        lls = np.array([_split_loglik(x, w_lo, w_hi, int(b), left, right,
+                                      sigma, p_flip) for b in bs])
+        b0 = int(bs[int(np.argmax(lls))])
+        spacing = max(1.0, (hi_b - lo_b) / 16.0)
+        width = max(0.5, 0.5 * spacing
+                    * np.count_nonzero(lls >= lls.max() - 2.0))
+        if spacing <= 1.5:
+            break
+        radius = int(max(2 * spacing, 8))
+        l_lo = max(lo, b0 - window)
+        r_hi = min(hi, b0 + window)
+        if b0 - l_lo >= 16:
+            left = _hmm_pair(x[l_lo:b0], sigma, p_flip, *left)[:2]
+        if r_hi - b0 >= 16:
+            right = _hmm_pair(x[b0:r_hi], sigma, p_flip, *right)[:2]
+    return b0, width, left, right
 
 
 def _scan_interval(x: np.ndarray, sigma: float, lo: int, hi: int,
@@ -320,7 +381,8 @@ def detect_charge_events(
     scan_stride : int
         Candidate-boundary spacing [samples]. On long traces the effective
         stride grows so the grid stays at most ~64 candidates per interval;
-        localization finer than the stride comes from the misfit refinement.
+        localization finer than the stride comes from the HMM-marginal
+        refinement.
     min_segment_samples : int
         Per-side length of the verification window: enough dwells on each
         branch to pin two conditional means (0.25 s at 10 kSa/s and ~17 Hz
@@ -350,8 +412,17 @@ def detect_charge_events(
     """
     x = model.project(np.asarray(iq))
     n = x.size
-    sigma = float(model.diagnostics.get("sigma_minor_axis", model.sigma)
-                  or model.sigma)
+    # Noise scale for every statistic below: the robust first-difference
+    # width *along the discrimination axis*. The EM width is inflated by the
+    # very smear being tested for; the minor-axis width understates
+    # anisotropic receiver noise (measured 1.38x smaller than the along-axis
+    # noise on the reference dataset, which would inflate every gain ~2x).
+    # First differences see neither slow wander nor the jump itself, and the
+    # median ignores the rare telegraph steps.
+    sigma = float(np.median(np.abs(np.diff(x))) / 0.9539) if n > 8 else 0.0
+    if not np.isfinite(sigma) or sigma <= 0:
+        sigma = float(model.diagnostics.get("sigma_minor_axis", model.sigma)
+                      or model.sigma)
     min_seg = int(min_segment_samples)
     decim = max(1, int(np.ceil(n / _SCREEN_SAMPLES)))
 
@@ -388,42 +459,29 @@ def detect_charge_events(
             if gain <= float(min_gain_nats):
                 continue
             # A candidate near a real jump verifies even when misplaced (the
-            # window straddles the jump either way), and one refinement pass
-            # under side pairs fitted to *mixed* windows inherits their
-            # compromise. Alternate: refine the boundary, refit the side
-            # pairs around it, repeat -- an EM-like loop that walks onto the
-            # true change point. The radius must cover the whole
-            # verification window, or a candidate a couple of strides off
-            # walks in short steps and runs out of rounds.
-            radius = max(stride, min_seg)
-            b, width = k, float(stride)
-            for _ in range(6):
-                b_new, width = _refine_boundary(x, sigma,
-                                                max(lo, b - radius),
-                                                min(hi, b + radius),
-                                                left, right)
-                moved = abs(b_new - b)
-                b = b_new
-                if moved <= 1:
-                    break
-                l_lo = max(lo, b - min_seg)
-                r_hi = min(hi, b + min_seg)
-                if b - l_lo >= 16:
-                    left = _hmm_pair(x[l_lo:b], sigma, p_flip, *left)[:2]
-                if r_hi - b >= 16:
-                    right = _hmm_pair(x[b:r_hi], sigma, p_flip, *right)[:2]
-            # Re-verify at the refined boundary: the recorded gain must
-            # belong to the boundary actually reported.
-            gain, _, _ = _verify_candidate(x, sigma, b, lo, hi, min_seg,
-                                           p_flip, init)
+            # window straddles the jump either way), so localize on the HMM
+            # marginal, then re-verify at the refined boundary: the recorded
+            # gain must belong to the boundary actually reported.
+            b, width, left, right = _refine_hmm(x, sigma, lo, hi, k, min_seg,
+                                                p_flip, left, right)
+            gain, left, right = _verify_candidate(x, sigma, b, lo, hi,
+                                                  min_seg, p_flip, init)
             n_verifications += 1
             if gain > max_gain_seen:
                 max_gain_seen = gain
-            if gain > float(min_gain_nats):
-                accepted.append((b, float(gain), width))
-                intervals.append((lo, b))
-                intervals.append((b, hi))
-                break
+            if gain <= float(min_gain_nats):
+                continue
+            healthy = min(abs(left[0] - left[1]),
+                          abs(right[0] - right[1])) >= _BLIND_SEPARATION * sigma
+            if healthy:
+                sharp = _sharpness(x, sigma, b, lo, hi, min_seg, p_flip,
+                                   left, right, min_seg // 8)
+                if sharp <= _MIN_SHARPNESS:
+                    continue
+            accepted.append((b, float(gain), width))
+            intervals.append((lo, b))
+            intervals.append((b, hi))
+            break
 
     # Prune against final neighbours. During the search a boundary is
     # verified inside its interval *at the time*, and a misplaced candidate

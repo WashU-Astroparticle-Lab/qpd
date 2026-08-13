@@ -280,6 +280,7 @@ def decode_burst_aware(
     p_burst: float = 0.3,
     burst_rate_hz: float = 1.0,
     burst_tau: float = 1e-3,
+    live: np.ndarray | None = None,
 ) -> BurstAwareResult:
     """Decode a static-bias trace under the parity x regime model.
 
@@ -310,6 +311,14 @@ def decode_burst_aware(
     burst_tau : float
         Quasiparticle burst decay time [s]; sets the regime exit probability
         ``dt / burst_tau``.
+    live : bool array, optional
+        Per-sample mask of trustworthy emissions. Steps whose source sample
+        is outside the mask are excluded from the quiet-rate hard-EM count
+        (numerator and denominator alike), so a dead stretch -- a segment
+        whose emission model is unusable after an offset-charge jump, where
+        the caller has equalized the branch means -- cannot dilute
+        ``p_quiet`` toward zero. ``None`` (the default) counts every step
+        and reproduces the previous behaviour exactly.
     """
     x = np.asarray(x)
     log_emit2 = gaussian_log_emissions(x, mu_a, mu_b, sigma)
@@ -330,6 +339,8 @@ def decode_burst_aware(
         trans = burst_transition_matrix(p_quiet, p_burst, entry, exit_)
         path4 = viterbi_regime(log_emit4, trans)
         quiet = _REGIME[path4[:-1]] == 0
+        if live is not None:
+            quiet &= np.asarray(live[:-1], dtype=bool)
         n_quiet = int(np.count_nonzero(quiet))
         if n_quiet == 0:
             break

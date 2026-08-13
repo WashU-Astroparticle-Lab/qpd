@@ -93,7 +93,7 @@ def run_damage_sweep():
             for label, kw in ARMS:
                 rec = reconstruct_parity_flips_static(tr.iq, FS, **kw)
                 s = score_flips(tr.flip_times, rec.flip_times, tol=TOL)
-                f1s[label].append(s.f1)
+                f1s[label].append(s.hard_f1)
                 fakes[label] += fake_bursts_at_jump(rec)
                 rates[label].append(rec.diagnostics["rate_hz"])
                 if label == ARMS[0][0]:

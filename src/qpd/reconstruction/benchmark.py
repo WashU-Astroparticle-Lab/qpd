@@ -273,7 +273,7 @@ class TraceFidelity:
                 "ramp reset comb      "
                 + (f"period {self.reset_comb.period:.6g} s"
                    if self.reset_comb is not None else "none found"))
-            lines.append(f"charge jumps         {self.charge_jump_times.size}")
+        lines.append(f"charge jumps         {self.charge_jump_times.size}")
         if self.degenerate:
             lines.append("DEGENERATE           yes -- the fitted model is not "
                          "trustworthy; see below")
@@ -350,11 +350,14 @@ def characterize_trace(
     if mode == "static":
         res = reconstruct_parity_flips_static(iq, sample_rate, t0=t0,
                                               **recon_kwargs)
+        # On a segmented trace res.model is the longest live segment's fit --
+        # the right blob geometry for surrogates, which are synthesized
+        # jump-free by construction.
         contrast_med = contrast_max = float(res.contrast)
         model = res.model
         fold_period = None
         comb = None
-        jumps = np.empty(0, float)
+        jumps = np.asarray(getattr(res, "charge_jump_times", ()), float)
         sigma = float(model.sigma)
     else:
         res = reconstruct_parity_flips_ramped(iq, sample_rate, t0=t0,
@@ -931,6 +934,13 @@ def benchmark_reconstruction(
             "found on the measured trace. Their phase realignment is baked "
             "into the replayed model, so the surrogates do not test "
             "rediscovering them.")
+    if fidelity.mode == "static" and fidelity.charge_jump_times.size:
+        warnings.append(
+            f"{fidelity.charge_jump_times.size} offset-charge jump(s) were "
+            "found on the measured trace. The surrogates replay the longest "
+            "live segment's blob geometry, jump-free, so they benchmark the "
+            "decode between jumps -- not the segmentation itself, and not "
+            "any dead time the jump caused on the measurement.")
 
     def _rates(rate, base_seed):
         """One injected rate per trial, jittered by the counting uncertainty."""
@@ -1306,6 +1316,8 @@ _RECON_KEYS = frozenset({
     "segment_charge_jumps", "model_ramp_resets", "ramp_period",
     "n_profile_windows", "n_segment_iterations", "decoder",
     "burst_aware", "burst_rate_hz", "p_burst", "burst_tau",
+    "charge_min_gain_nats", "charge_min_segment_samples",
+    "boundary_guard_samples",
 })
 
 
