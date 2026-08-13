@@ -1174,7 +1174,7 @@ def sweep_burst_size(
     n_trials: int = 6,
     seed: int = 0,
     burst_spacing: float = 0.25,
-    burst_tau: float = 3.7e-3,
+    burst_tau: float = 1.0e-3,
     burst_mu: float = 1.2e-3,
     burst_sigma: float = 0.4e-3,
     trial_samples: int | None = None,
@@ -1226,8 +1226,11 @@ def sweep_burst_size(
         Interval between injected bursts [s]. Must stay well above the burst
         duration (~12 ms on the reference device) so they do not merge.
     burst_tau, burst_mu, burst_sigma : float
-        EMG shape of the burst arrival profile; defaults are the reference
-        device's.
+        EMG shape of the burst arrival profile. ``burst_tau`` defaults to 1 ms,
+        giving a burst that lands inside a few milliseconds; the reference
+        device's measured value is 3.7 ms, which spreads one over ~12 ms. The
+        two interact with ``detect_bursts``'s linking distance, so change them
+        together.
     select_min_contrast : float, optional
         Skip a surrogate whose re-fitted contrast falls below this, exactly as
         in :func:`benchmark_reconstruction`. Its bursts contribute to neither

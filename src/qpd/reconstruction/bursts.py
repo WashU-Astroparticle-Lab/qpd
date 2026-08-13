@@ -27,6 +27,14 @@ Two things about this are worth stating up front, because both bite.
   Take it from the data (``BenchmarkReport.corrected_rate_hz``), not from an
   assumption. Too low a rate manufactures bursts out of background pairs; too
   high a rate dissolves the small ones.
+* **The significance gate is off by default.** ``max_p_value=None`` means every
+  linked cluster of ``min_flips`` or more is returned, untested. With a fixed
+  3 ms linking distance that is workable at a low background over a short
+  trace, and it is *not* rate-invariant -- measured false bursts per 1 s trace
+  of pure background: 0.04 at 17 Hz, 1.4 at 60 Hz, 22.5 at 200 Hz. The gate is
+  what removes that rate dependence (0.007-0.020 across the same span), so pass
+  ``max_p_value=1e-3`` before trusting the detector anywhere but the regime the
+  defaults were chosen for.
 """
 
 from __future__ import annotations
@@ -64,9 +72,9 @@ def detect_bursts(
     background_rate_hz: float,
     *,
     duration: float | None = None,
-    max_gap: float | None = None,
+    max_gap: float | None = 3e-3,
     min_flips: int = 3,
-    max_p_value: float = 1e-3,
+    max_p_value: float | None = None,
 ) -> list[DetectedBurst]:
     """Cluster a flip train into bursts, against a Poisson background.
 
@@ -98,16 +106,30 @@ def detect_bursts(
         ``flip_times``, which is right for a full trace and slightly
         conservative for a slice.
     max_gap : float, optional
-        Linking distance [s]. Defaults to ``0.1 / background_rate_hz`` -- the
-        gap the background exceeds 90% of the time, so accidental links are
-        rare while genuine intra-burst gaps (sub-millisecond on the reference
-        device) are far below it.
+        Linking distance [s], default 3 ms. Flips closer than this join one
+        cluster. Pass ``None`` for the adaptive ``0.1 / background_rate_hz``,
+        which is the gap the background exceeds 90% of the time and therefore
+        scales itself to the rate; the fixed default does not, so re-check it
+        if the background moves far from the few tens of Hz it was chosen at.
     min_flips : int
         Smallest cluster that may be called a burst. Two flips are never
         enough: a background pair straddling ``max_gap`` is common, and no
         p-value on two events survives the trials factor anyway.
-    max_p_value : float
-        Significance gate after the trials correction.
+    max_p_value : float, optional
+        Significance gate after the trials correction. **Disabled by default**:
+        with ``None`` every linked cluster of at least ``min_flips`` flips is
+        returned, with no test against the background at all.
+
+        That is a deliberate choice for exploratory work, and it costs
+        something specific -- the gate is the only thing standing between the
+        clustering and the background's own coincidences, so the false-burst
+        rate rises by orders of magnitude (measured below and in
+        ``docs/reconstruction.md`` §12d). Pass a value, e.g. ``1e-3``, to
+        restore it; the reported ``p_value`` is computed either way, so a
+        cluster list can also be filtered afterwards.
+    duration : float, optional
+        Trace duration [s], used only for the trials factor of the significance
+        gate. Irrelevant while ``max_p_value`` is ``None``.
 
     Returns
     -------
@@ -151,10 +173,12 @@ def detect_bursts(
         p_local = float(poisson.sf(m - 1, lam))
         trials = max(dur / t_eff, 1.0)
         p = float(min(1.0, trials * p_local))
-        if p <= float(max_p_value):
-            out.append(DetectedBurst(
-                t_start=float(c[0]), t_end=float(c[-1]), n_flips=m,
-                p_value=p, flip_times=c))
+        # `p` is always reported; it only rejects when a gate was asked for.
+        if max_p_value is not None and p > float(max_p_value):
+            continue
+        out.append(DetectedBurst(
+            t_start=float(c[0]), t_end=float(c[-1]), n_flips=m,
+            p_value=p, flip_times=c))
     return out
 
 

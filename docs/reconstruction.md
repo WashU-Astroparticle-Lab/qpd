@@ -1301,8 +1301,33 @@ $$p = \min\left(1,\ \frac{D}{T}\, P\big[\mathrm{Poisson}(\lambda T) \ge m\big]\r
 
 for $m$ flips spanning $T$ in a trace of duration $D$. The $D/T$ trials factor
 is not optional: the cluster was *selected* for being dense, so the raw Poisson
-tail is not a false-alarm rate. Measured false-burst rate on pure background:
-**< 0.01 per 5 s trace**, and rate-invariant from 5 Hz to 500 Hz.
+tail is not a false-alarm rate.
+
+**The gate is disabled by default** (`max_p_value=None`): every linked cluster
+of at least `min_flips` flips is returned, untested, and the linking distance
+is a fixed 3 ms. That pairing targets a low background over a short trace and
+is deliberately *not* rate-invariant. Measured false bursts per 1 s trace of
+pure background:
+
+| background | default (gate off) | `max_p_value=1e-3` |
+|---|---|---|
+| 17 Hz | 0.04 | 0.007 |
+| 60 Hz | 1.4 | 0.010 |
+| 200 Hz | 22.5 | 0.020 |
+
+Pass `max_p_value=1e-3` to restore the gate and with it rate-invariance
+(< 0.02 per trace from 5 Hz to 500 Hz). The `p_value` is computed and reported
+either way, so a cluster list can equally be filtered afterwards.
+
+**Burst duration and the sample period interact.** `sweep_burst_size` injects
+`burst_tau = 1 ms` by default, which lands a burst inside a few milliseconds.
+At 10 kSa/s a 30-quasiparticle burst then has **59% of its intra-burst gaps
+below one sample period**, and an unresolved pair cancels in the parity rather
+than being mistimed — so detection efficiency saturates near 0.6 instead of
+reaching 1. The reference device's measured `burst_tau = 3.7 ms` spreads the
+same burst over ~15 ms and drops that to 29%. This is a sampling limit, not a
+clustering one: if your bursts really are that fast, the fix is a faster
+digitiser, not a different detector.
 
 ```python
 from qpd.reconstruction import (benchmark_reconstruction, sweep_burst_size,
