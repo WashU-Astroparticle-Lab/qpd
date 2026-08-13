@@ -44,6 +44,24 @@ from .hmm import decode_with_rate, decoded_path
 __all__ = ["StaticBlobModel", "StaticReconstructionResult", "fit_two_blobs",
            "reconstruct_parity_flips_static"]
 
+# More accepted charge events than this in one trace is not physics: real
+# jump rates are ~0.1 Hz, so even a 5 s trace should carry 0 or 1 (a few for
+# a correlated impact cluster). Beyond it the stationary-blob model itself is
+# in doubt -- drift, transients, gain wander -- and acting on the boundaries
+# would shred good data, so segmentation is abandoned (and said so) instead.
+_MAX_PLAUSIBLE_EVENTS = 3
+
+# Dead-time test for post-jump segments. The global `min_detectability` (70)
+# is calibrated for whole-trace flagging and is far stricter than what
+# separates a *disastrous* segment from a marginal one: a genuinely blind
+# landing makes the decoder toggle, which collapses the decoded dwell, and
+# with it contrast * sqrt(dwell) -- measured 6.8 at the parity-blind landing
+# against 15.8 at the nearest marginal-but-decodable bias (10 kSa/s, 17 Hz).
+# 12 splits the two with margin both ways. A marginal segment is *decoded and
+# reported* (same semantics as the global degenerate flag, which flags but
+# still returns); only the toggle-collapse case becomes dead time.
+_SEGMENT_DEAD_DETECTABILITY = 12.0
+
 
 @dataclass
 class StaticBlobModel:
@@ -185,6 +203,10 @@ class StaticReconstructionResult:
     model: StaticBlobModel | None = None
     p_flip: float = 0.0
     diagnostics: dict = field(default_factory=dict)
+    # Detected offset-charge events [s], same axis as flip_times. Mirrors the
+    # ramped ReconstructionResult attribute of the same name.
+    charge_jump_times: np.ndarray = field(
+        default_factory=lambda: np.empty(0))
 
     @property
     def rate_hz(self) -> float:
@@ -273,6 +295,10 @@ def reconstruct_parity_flips_static(
     burst_rate_hz: float = 1.0,
     p_burst: float = 0.3,
     burst_tau: float = 1e-3,
+    segment_charge_jumps: bool = False,
+    charge_min_gain_nats: float = 15.0,
+    charge_min_segment_samples: int = 2500,
+    boundary_guard_samples: int = 3,
 ) -> StaticReconstructionResult:
     """Recover parity-flip times from a **fixed-offset-charge** trace, blind.
 
@@ -306,10 +332,11 @@ def reconstruct_parity_flips_static(
         for precision, which matters most at low contrast.
     segment_blocks : int
         Fit the blob model independently in this many equal blocks. The default
-        of 1 is right for a genuinely constant bias. Raise it if the bias point
-        drifts or takes a charge jump mid-trace: unlike the ramped case, a jump
-        here moves the blobs outright, and one stale global fit would corrupt the
-        whole decode.
+        of 1 is right for a genuinely constant bias; raise it for slow *drift*.
+        Discrete charge jumps are handled by ``segment_charge_jumps`` (the
+        detected boundaries supersede this grid when both are active, since
+        the measured edges answer the same question better than equal-width
+        blocks).
     min_detectability : float
         Threshold on ``contrast * sqrt(dwell in samples)`` -- the contrast
         integrated over one dwell. Only declares the bias point unusable when
@@ -353,6 +380,43 @@ def reconstruct_parity_flips_static(
         Pinned per-sample flip probability inside a burst (not fitted).
     burst_tau : float
         Burst decay time [s]; sets the regime exit prior.
+    segment_charge_jumps : bool
+        Detect offset-charge events and refit the blob model per segment.
+        Unlike the ramped case, a jump here moves the blobs outright: an
+        undetected one smears flips, silently kills the post-jump stretch
+        when the new bias lands near the parity-blind charge (measured F1
+        0.95 -> 0.30 with the reported rate inflated 16 -> 40 Hz), or
+        starves a coincident burst -- and real impact events produce charge
+        jumps *and* bursts together, so that failure lands on the signal.
+        Detection is blind
+        (:func:`~qpd.reconstruction.charge_events.detect_charge_events`);
+        on a trace with no verified event the decode is identical to
+        ``segment_charge_jumps=False``, and a post-jump segment whose refit
+        fails the toggle-collapse test is declared **dead time** --
+        reported, masked, never silently decoded with a stale model.
+
+        **Off by default, deliberately.** On measured devices the emission
+        model is not piecewise-constant: 1/f charge noise is physically a
+        dense train of micro-jumps, and pulsed calibration sources (LED
+        flashes) are genuine sharp model steps -- on the reference LED
+        dataset the detector locks onto the 60 ms flash comb with formally
+        enormous significance. Both are correct detections of the wrong
+        thing, and no within-trace statistic can separate them from the
+        rare discrete jump this option targets (several were tried and
+        measured; see ``docs/reconstruction.md`` section 12g). Turn it on
+        for dark data at a stable bias, or when a specific trace is
+        suspected; read ``diagnostics["charge_event_times"]`` and
+        ``live_fraction`` before trusting the output either way.
+    charge_min_gain_nats : float
+        Acceptance threshold on the detector's verified likelihood ratio.
+    charge_min_segment_samples : int
+        Shortest segment that gets its own refit; anything shorter between
+        detected boundaries (or against the trace ends) is dead time.
+    boundary_guard_samples : int
+        Drop flips within this many samples of a detected boundary: branch
+        identity does not survive a jump, so a transition there is
+        bookkeeping, not physics. (A quasiparticle-tunnelling-induced jump
+        does flip the parity, but the flip cannot be counted honestly.)
 
     Returns
     -------
@@ -363,9 +427,93 @@ def reconstruct_parity_flips_static(
     n = iq.size
     blocks = max(1, int(segment_blocks))
 
-    if model is not None or blocks == 1:
-        fitted = model if model is not None else fit_two_blobs(iq)
-        x = fitted.project(iq)
+    fitted = model if model is not None else fit_two_blobs(iq)
+    x = fitted.project(iq)
+
+    # Charge-event detection runs first, on the global fit -- also when a
+    # model was supplied, since a forced bias point can still jump.
+    events = None
+    if segment_charge_jumps and n >= 2 * int(charge_min_segment_samples):
+        # Local import: charge_events imports StaticBlobModel from here.
+        from .charge_events import detect_charge_events
+        events = detect_charge_events(
+            iq, fitted, dt,
+            min_gain_nats=float(charge_min_gain_nats),
+            min_segment_samples=int(charge_min_segment_samples),
+            p_flip=p_flip_init)
+
+    abandoned = None
+    if events is not None and events.boundaries.size > _MAX_PLAUSIBLE_EVENTS:
+        abandoned, events = events, None
+
+    live = None
+    seg_edges = None
+    seg_models: list[StaticBlobModel | None] | None = None
+    dead_idx: list[tuple[int, int]] = []
+    if events is not None and events.boundaries.size:
+        # Verified boundaries supersede the equal-width segment_blocks grid:
+        # both mechanisms answer "where does the blob model change", and the
+        # detected edges are the measured answer.
+        blocks = 1
+        min_seg = int(charge_min_segment_samples)
+        seg_edges = np.concatenate(([0], events.boundaries, [n])).astype(int)
+        mu_a = np.empty(n)
+        mu_b = np.empty(n)
+        sigmas = []
+        seg_models = []
+        live = np.ones(n, dtype=bool)
+        per_block = [fitted]
+        for lo, hi in zip(seg_edges[:-1], seg_edges[1:]):
+            seg = x[lo:hi]
+            seg_fit = None
+            m_hi = m_lo = 0.0
+            dead = hi - lo < min_seg
+            if not dead:
+                seg_fit = fit_two_blobs(iq[lo:hi])
+                # Re-express the segment's centres on the global axis
+                # *geometrically*: map each fitted centre back to the I/Q
+                # plane and project it. The segment_blocks path below instead
+                # averages hard-classified samples, whose conditional means
+                # are truncation-biased apart at contrast ~1 -- enough to
+                # make a marginal post-jump segment decode as a toggling mess
+                # and fail the dead test it should pass.
+                for_c = np.conj(fitted.direction)
+                pa, pb = (float(np.real(for_c * (
+                    seg_fit.origin + seg_fit.direction * mu - fitted.origin)))
+                    for mu in (seg_fit.mu_a, seg_fit.mu_b))
+                m_hi, m_lo = (pa, pb) if pa >= pb else (pb, pa)
+                # Per-segment health: the same *shape* of rule as the global
+                # `degenerate` flag but with the segment-calibrated
+                # detectability cut (see _SEGMENT_DEAD_DETECTABILITY),
+                # evaluated in the segment's own frame. There is deliberately
+                # NO fallback to the global centres here -- after a jump they
+                # are exactly the wrong answer, and installing them would
+                # reintroduce the silent failure this whole branch exists to
+                # close.
+                xb = seg_fit.project(iq[lo:hi])
+                _, p_seg, _ = decode_with_rate(
+                    xb, np.full(hi - lo, seg_fit.mu_a),
+                    np.full(hi - lo, seg_fit.mu_b),
+                    seg_fit.sigma, p_flip_init, 2)
+                det_seg = seg_fit.contrast * np.sqrt(1.0 / max(p_seg, 1e-12))
+                dead = bool(det_seg < _SEGMENT_DEAD_DETECTABILITY
+                            and seg_fit.contrast < float(min_contrast))
+            if dead:
+                # Equalized means carry no parity evidence: the decoder
+                # coasts through on the transition prior alone, which is the
+                # honest treatment of a stretch whose emissions are unusable.
+                mu_a[lo:hi] = mu_b[lo:hi] = float(np.mean(seg))
+                live[lo:hi] = False
+                dead_idx.append((int(lo), int(hi)))
+                seg_models.append(None)
+            else:
+                mu_a[lo:hi], mu_b[lo:hi] = m_hi, m_lo
+                sigmas.append(seg_fit.sigma)
+                seg_models.append(seg_fit)
+        sigma = float(np.median(sigmas)) if sigmas else fitted.sigma
+        if bool(live.all()):
+            live = None
+    elif model is not None or blocks == 1:
         mu_a = np.full(n, fitted.mu_a)
         mu_b = np.full(n, fitted.mu_b)
         sigma = fitted.sigma
@@ -373,8 +521,6 @@ def reconstruct_parity_flips_static(
     else:
         # Per-block fits, evaluated on a common axis so the decoded branch label
         # stays comparable across block boundaries.
-        fitted = fit_two_blobs(iq)
-        x = fitted.project(iq)
         mu_a = np.empty(n)
         mu_b = np.empty(n)
         sigmas = []
@@ -413,7 +559,7 @@ def reconstruct_parity_flips_static(
         bres = decode_burst_aware(
             x, mu_a, mu_b, sigma, dt, p_flip_init=p_flip_init,
             n_iter=n_rate_iterations, p_burst=p_burst,
-            burst_rate_hz=burst_rate_hz, burst_tau=burst_tau)
+            burst_rate_hz=burst_rate_hz, burst_tau=burst_tau, live=live)
         p = bres.p_quiet
         history = bres.diagnostics["p_quiet_history"]
         posterior = bres.parity_posterior
@@ -435,6 +581,20 @@ def reconstruct_parity_flips_static(
         loglik = res.log_likelihood
         bres = None
     times, conf = extract_flips(path, posterior, dt, t0=t0)
+    n_suppressed = 0
+    if events is not None and events.boundaries.size:
+        # Flips at a boundary are bookkeeping (branch identity does not
+        # survive a jump), and flips inside dead windows are decoded against
+        # equalized means, i.e. noise. Both go, before the confidence cut so
+        # the reported counts compose.
+        keep = np.ones(times.size, dtype=bool)
+        guard = float(boundary_guard_samples) * dt
+        for b in events.boundaries:
+            keep &= np.abs(times - (t0 + b * dt)) > guard
+        for lo, hi in dead_idx:
+            keep &= ~((times >= t0 + lo * dt) & (times < t0 + hi * dt))
+        n_suppressed = int(np.count_nonzero(~keep))
+        times, conf = times[keep], conf[keep]
     if min_confidence > 0:
         keep = conf >= min_confidence
         times, conf = times[keep], conf[keep]
@@ -459,10 +619,57 @@ def reconstruct_parity_flips_static(
     # direction. The likelihood gain of two blobs over one was also tried and
     # is useless here: it is ~0 for the usable n_g = 0.22 and the blind
     # n_g = 0.24 alike.
+    # When the trace was segmented, the global fit is a blend across the jump
+    # and its contrast understates the usable segments; judge health on the
+    # longest live segment instead. No live segment at all is degenerate by
+    # definition.
+    health = fitted
+    no_live = False
+    if seg_models is not None:
+        spans = [(hi - lo, m) for (lo, hi), m in
+                 zip(zip(seg_edges[:-1], seg_edges[1:]), seg_models)
+                 if m is not None]
+        if spans:
+            health = max(spans, key=lambda s: s[0])[1]
+        else:
+            no_live = True
     dwell_samples = 1.0 / max(p, 1e-12)
-    detectability = fitted.contrast * np.sqrt(dwell_samples)
-    degenerate = bool(detectability < float(min_detectability)
-                      and fitted.contrast < float(min_contrast))
+    detectability = health.contrast * np.sqrt(dwell_samples)
+    degenerate = bool(no_live
+                      or (detectability < float(min_detectability)
+                          and health.contrast < float(min_contrast)))
+
+    charge_extra = {}
+    jump_times = np.empty(0)
+    if abandoned is not None:
+        charge_extra = {
+            "segment_charge_jumps": True,
+            "charge_segmentation_abandoned": True,
+            "charge_event_times": t0 + abandoned.boundaries * dt,
+            "charge_event_gain_nats": abandoned.gain_nats,
+            "charge_scan": abandoned.scan,
+        }
+    if events is not None:
+        jump_times = t0 + events.boundaries * dt
+        charge_extra = {
+            "segment_charge_jumps": True,
+            "charge_event_times": jump_times,
+            "charge_event_gain_nats": events.gain_nats,
+            "charge_event_localization_s": events.localization_sigma * dt,
+            "charge_scan": events.scan,
+        }
+        if events.boundaries.size:
+            charge_extra.update({
+                "segment_edges": seg_edges,
+                "segment_models": seg_models,
+                "dead_windows": [(t0 + lo * dt, t0 + hi * dt)
+                                 for lo, hi in dead_idx],
+                "live_fraction": (float(np.mean(live)) if live is not None
+                                  else 1.0),
+                "n_boundary_suppressed": n_suppressed,
+                "segment_blocks_superseded": int(segment_blocks) > 1,
+                "global_model": fitted,
+            })
 
     extra = {}
     if bres is not None:
@@ -489,8 +696,12 @@ def reconstruct_parity_flips_static(
         confidence=conf,
         posterior=posterior,
         branch=path,
-        model=fitted,
+        # On a segmented trace the global fit is a blend; the longest live
+        # segment's model is the representative one (the global fit is kept
+        # under diagnostics["global_model"]).
+        model=health,
         p_flip=p,
+        charge_jump_times=jump_times,
         diagnostics={
             "decoder": decoder,
             "viterbi_path": viterbi_path,
@@ -499,15 +710,16 @@ def reconstruct_parity_flips_static(
             "n_flips": int(times.size),
             "log_likelihood": loglik,
             **extra,
-            "contrast": fitted.contrast,
-            "separation": fitted.separation,
+            **charge_extra,
+            "contrast": health.contrast,
+            "separation": health.separation,
             "sigma": sigma,
-            "weight_a": fitted.weight_a,
+            "weight_a": health.weight_a,
             "segment_blocks": blocks,
             "degenerate": degenerate,
             "detectability": float(detectability),
             "dwell_samples": float(dwell_samples),
-            "loglik_gain_two_vs_one_blob": fitted.diagnostics.get("loglik_gain"),
+            "loglik_gain_two_vs_one_blob": health.diagnostics.get("loglik_gain"),
             "block_models": per_block if blocks > 1 else None,
         },
     )
