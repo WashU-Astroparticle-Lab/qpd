@@ -1505,6 +1505,20 @@ survives a `min_confidence=0.4` cut (7.7 vs 7.9 at $n_\text{qp} = 20$).
 
 ![before/after comparison](figures/burst_aware_comparison.png)
 
+**On measured data** the picture is the same. Re-decoding the BE260213.2
+constant-bias dataset (109 both-device chunks of 1 s at 10 kSa/s passing
+contrast > 1.7, `min_confidence` 0.4, Viterbi throughout):
+
+* the burst catalogue grows 152 → 243 — the newcomers are bursts that
+  previously decoded to fewer than the 3-flip cluster threshold;
+* mean recovered multiplicity rises 3.5 → 5.2, and the gain sits entirely in
+  the tail: bursts found by both decoders are mostly unchanged (median
+  per-burst ratio 1.0) while the largest recovered burst grows from 8 to 37
+  tunnels across a ~16 ms regime window;
+* the median reported background rate drops 36 → 25 Hz once bursts stop
+  inflating the global rate fit — the quiet-regime rate is the number the
+  Poisson-background analyses should use.
+
 The gates live in `checks/check_burst_aware_hmm.py`. The remaining distance to
 truth at large $n_\text{qp}$ is a *counting* limitation — sub-sample dwells
 cancel in the parity — and closing it means estimating the in-window rate
