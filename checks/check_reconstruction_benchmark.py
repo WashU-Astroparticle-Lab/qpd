@@ -359,16 +359,42 @@ def main() -> int:
 
     # --- 11. burst finder ---------------------------------------------------
     print("\n11. Burst finder on a flip train")
-    # The number that matters: how often pure background fakes a burst. It must
-    # also be rate-invariant, since the linking distance scales with the rate.
+    # How often pure background fakes a burst. The significance gate is what
+    # makes this rate-invariant, and it is OFF by default -- so assert both
+    # halves, or a future reader will assume a guarantee that is not there.
     for rate in (5.0, 50.0, 500.0):
         n_false, n_tr, D = 0, 120, 5.0
         for s in range(n_tr):
             r = np.random.default_rng(s)
             t = np.sort(r.uniform(0.0, D, r.poisson(rate * D)))
-            n_false += len(detect_bursts(t, rate, duration=D))
-        check(f"false bursts on pure {rate:.0f} Hz background stay rare",
+            n_false += len(detect_bursts(t, rate, duration=D,
+                                         max_p_value=1e-3))
+        check(f"WITH the gate, false bursts at {rate:.0f} Hz stay rare",
               n_false / n_tr < 0.05, f"{n_false / n_tr:.3f} per {D:.0f} s trace")
+
+    # Default (gate off, fixed 3 ms link): acceptable in the low-rate, short
+    # trace regime it is meant for, and explicitly NOT rate-invariant.
+    def _false_rate(rate, D, n=200, **kw):
+        tot = 0
+        for s in range(n):
+            r = np.random.default_rng(s)
+            t = np.sort(r.uniform(0.0, D, r.poisson(rate * D)))
+            tot += len(detect_bursts(t, rate, duration=D, **kw))
+        return tot / n
+
+    lo = _false_rate(17.0, 1.0)
+    hi = _false_rate(200.0, 1.0)
+    check("defaults are usable at the low-rate short-trace operating point",
+          lo < 0.15, f"{lo:.3f} false bursts per 1 s trace at 17 Hz")
+    check("defaults are NOT rate-invariant, and the checks say so",
+          hi > 10 * max(lo, 1e-3),
+          f"{lo:.3f} at 17 Hz vs {hi:.2f} at 200 Hz per 1 s trace")
+    check("restoring max_p_value recovers rate-invariance",
+          _false_rate(200.0, 1.0, max_p_value=1e-3) < 0.05,
+          f"{_false_rate(200.0, 1.0, max_p_value=1e-3):.3f} per 1 s trace")
+    check("p_value is still reported even with the gate off",
+          all(np.isfinite(b.p_value) for b in detect_bursts(
+              np.array([0.0, 1e-3, 2e-3, 3e-3]), 17.0, duration=1.0)))
 
     # And that it finds real ones. On a truth train (no reconstruction), a
     # 20-quasiparticle burst is unmistakable.
