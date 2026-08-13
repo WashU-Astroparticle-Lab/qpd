@@ -1439,8 +1439,10 @@ $\ln((1-p)/p) \approx 6$ nats for every in-burst toggle. The result is the flat
 multiplicity curve of §12d — recovered counts pinned near the cluster threshold
 (≈ 3–4) regardless of the true burst size.
 
-`burst_aware=True` on `reconstruct_parity_flips_static` replaces the two-state
-chain with four states — parity ⊗ regime:
+`reconstruct_parity_flips_static` therefore decodes with a four-state chain —
+parity ⊗ regime — **by default** (`burst_aware=True`; pass `False` for the
+plain two-state decoder, which is ~6× cheaper and identical on burst-free
+traces):
 
 $$(A,\text{quiet}),\quad (B,\text{quiet}),\quad (A,\text{burst}),\quad (B,\text{burst}).$$
 

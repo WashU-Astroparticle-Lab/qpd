@@ -269,7 +269,7 @@ def reconstruct_parity_flips_static(
     min_contrast: float = 1.5,
     model: StaticBlobModel | None = None,
     decoder: str = "viterbi",
-    burst_aware: bool = False,
+    burst_aware: bool = True,
     burst_rate_hz: float = 1.0,
     p_burst: float = 0.3,
     burst_tau: float = 1e-3,
@@ -335,13 +335,15 @@ def reconstruct_parity_flips_static(
         comparison.
     burst_aware : bool
         Decode with the parity x regime chain of
-        :mod:`~qpd.reconstruction.burst_hmm` instead of the two-state HMM. The
-        global flip prior smooths quasiparticle bursts down to two or three
-        recovered flips regardless of their true size (issue #40); the
-        burst-aware chain gives burst windows their own flip probability, at
-        no change to background behaviour. The reported ``rate_hz`` then
-        refers to the *quiet* regime, i.e. it is the background rate no longer
-        inflated by the bursts.
+        :mod:`~qpd.reconstruction.burst_hmm` (the default) instead of the
+        plain two-state HMM. The global flip prior smooths quasiparticle
+        bursts down to two or three recovered flips regardless of their true
+        size (issue #40); the burst-aware chain gives burst windows their own
+        flip probability, at no change to background behaviour, which is why
+        it is on by default. The reported ``rate_hz`` then refers to the
+        *quiet* regime, i.e. it is the background rate no longer inflated by
+        the bursts. Pass ``False`` for the two-state decoder -- it is ~6x
+        cheaper and identical on burst-free traces.
     burst_rate_hz : float
         Expected burst occurrence rate [Hz], only used when ``burst_aware``.
         Sets the regime entry prior; logarithmic sensitivity, so an order of

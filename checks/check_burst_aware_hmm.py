@@ -149,7 +149,8 @@ for k in range(n_seeds):
     par = np.searchsorted(flips, t, side="right") % 2
     w = (t >= lo) & (t <= hi)
     vis_w.append(np.count_nonzero(np.diff(par[w.nonzero()[0]])))
-    for kw, out in [({}, base_w), ({"burst_aware": True}, ba_w)]:
+    for kw, out in [({"burst_aware": False}, base_w),
+                    ({"burst_aware": True}, ba_w)]:
         r = reconstruct_parity_flips_static(iq, FS, **kw)
         out.append(np.count_nonzero((r.flip_times >= lo)
                                     & (r.flip_times <= hi)))
@@ -165,7 +166,8 @@ effs, purs = {"base": [], "ba": []}, {"base": [], "ba": []}
 false_bursts = {"base": 0, "ba": 0}
 for k in range(n_bg):
     iq, truth = fid.synthesize(seed=900 + k, rate_hz=BG)
-    for key, kw in [("base", {}), ("ba", {"burst_aware": True})]:
+    for key, kw in [("base", {"burst_aware": False}),
+                    ("ba", {"burst_aware": True})]:
         r = reconstruct_parity_flips_static(iq, FS, **kw)
         s = score_flips(truth, r.flip_times, tol=0.5e-3)
         effs[key].append(s.efficiency)
