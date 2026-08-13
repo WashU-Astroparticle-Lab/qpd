@@ -418,10 +418,45 @@ class BenchmarkReport:
     scale: float = DEFAULT_SCALE
     noise_scale: float = 1.0
     rate_jitter: bool = True
+    select_min_contrast: float | None = None
     warnings: list[str] = field(default_factory=list)
 
+    @property
+    def selected(self) -> list:
+        """Trials that pass ``select_min_contrast``, i.e. the ones scored.
+
+        A surrogate is subject to the same acceptance cut you would apply to a
+        real chunk. That matters most at low injected rate, where a short trace
+        can contain *no* flips at all: with no transition the two-branch model
+        is unidentifiable, EM splits a single blob spuriously (contrast ~0.9),
+        and the decoder segments noise into hundreds of fabricated events.
+        Pooling those into the average is what makes purity appear to collapse
+        at low rate -- measured on a 1 s, 10 kSa/s trace at contrast 2.4, 36%
+        of 1 Hz surrogates held no flips and purity read 0.08; applying the
+        same contrast > 1.7 cut used to select the real chunks gives 1.00.
+        """
+        if self.select_min_contrast is None:
+            return list(self.trials)
+        thr = float(self.select_min_contrast)
+        return [t for t in self.trials
+                if np.isfinite(t.contrast_median) and t.contrast_median > thr]
+
+    @property
+    def n_excluded(self) -> int:
+        """Trials rejected by the acceptance cut."""
+        return len(self.trials) - len(self.selected)
+
+    @property
+    def selection_fraction(self) -> float:
+        """Fraction of surrogates that pass the cut.
+
+        This is a *result*, not bookkeeping: at a given rate and trace length it
+        is the probability that a real chunk will be usable at all.
+        """
+        return len(self.selected) / len(self.trials) if self.trials else np.nan
+
     def _agg(self, attr: str) -> tuple[float, float]:
-        v = np.array([getattr(t.score, attr) for t in self.trials], dtype=float)
+        v = np.array([getattr(t.score, attr) for t in self.selected], dtype=float)
         v = v[np.isfinite(v)]
         if v.size == 0:
             return float("nan"), float("nan")
@@ -447,8 +482,8 @@ class BenchmarkReport:
         The interval is the normal approximation, so it is only sensible away
         from 0 and 1; near the bounds prefer Wilson or Clopper-Pearson.
         """
-        num = sum(int(t.score.n_matched) for t in self.trials)
-        den = sum(int(getattr(t.score, denom)) for t in self.trials)
+        num = sum(int(t.score.n_matched) for t in self.selected)
+        den = sum(int(getattr(t.score, denom)) for t in self.selected)
         if den <= 0:
             return float("nan"), float("nan")
         p = num / den
@@ -476,8 +511,8 @@ class BenchmarkReport:
         0.126 and the bootstrap 0.112. Treat that spread as the warning it is,
         and cross-check with :attr:`purity_bootstrap` when it appears.
         """
-        a = np.array([t.score.n_matched for t in self.trials], dtype=float)
-        b = np.array([getattr(t.score, denom) for t in self.trials],
+        a = np.array([t.score.n_matched for t in self.selected], dtype=float)
+        b = np.array([getattr(t.score, denom) for t in self.selected],
                      dtype=float)
         n = a.size
         tot = b.sum()
@@ -541,8 +576,8 @@ class BenchmarkReport:
         still tightens as ``1/sqrt(n_trials)``. It costs nothing: the per-trial
         counts are already stored, so no reconstruction is repeated.
         """
-        num = np.array([t.score.n_matched for t in self.trials], dtype=float)
-        den = np.array([getattr(t.score, denom) for t in self.trials],
+        num = np.array([t.score.n_matched for t in self.selected], dtype=float)
+        den = np.array([getattr(t.score, denom) for t in self.selected],
                        dtype=float)
         tot = den.sum()
         if tot <= 0 or num.size == 0:
@@ -620,7 +655,7 @@ class BenchmarkReport:
     @property
     def residuals(self) -> np.ndarray:
         """All matched timing residuals, pooled over trials [s]."""
-        parts = [t.score.dt for t in self.trials if t.score.dt.size]
+        parts = [t.score.dt for t in self.selected if t.score.dt.size]
         return np.concatenate(parts) if parts else np.empty(0, float)
 
     # -- what this implies for the measured trace --------------------------
@@ -675,7 +710,7 @@ class BenchmarkReport:
         """
         if self.noise_scale != 1.0:
             return float("nan")
-        c = np.array([t.contrast_median for t in self.trials], dtype=float)
+        c = np.array([t.contrast_median for t in self.selected], dtype=float)
         c = c[np.isfinite(c)]
         ref = self.fidelity.contrast_median
         if c.size == 0 or not np.isfinite(ref) or ref == 0:
@@ -710,6 +745,10 @@ class BenchmarkReport:
             f"timing bias          {b * 1e6:+.1f} +/- {b_e * 1e6:.1f} us",
             f"timing rms           {r * 1e6:.1f} +/- {r_e * 1e6:.1f} us",
             f"match tolerance      {self.tol * 1e6:.0f} us",
+            (f"accepted             {len(self.selected)}/{len(self.trials)} "
+             f"surrogates (contrast > {self.select_min_contrast:g})"
+             if self.select_min_contrast is not None else
+             f"accepted             all {len(self.trials)} surrogates"),
             f"closure (sim/meas)   {self.closure:.3f}",
             "",
             f"Implied rate on the measured trace: "
@@ -751,6 +790,7 @@ def benchmark_reconstruction(
     noise_scale: float = 1.0,
     rate_hz: float | None = None,
     rate_jitter: bool = True,
+    select_min_contrast: float | None = None,
     bursts=None,
     tol: float = DEFAULT_TOL,
     scale: float = DEFAULT_SCALE,
@@ -809,6 +849,19 @@ def benchmark_reconstruction(
         than the measurement, and reports things like ``1.000 +/- 0.000`` off a
         nine-flip trace. Turn it off to isolate the decoder's own scatter at a
         fixed rate.
+    select_min_contrast : float, optional
+        Accept a surrogate only if its *re-fitted* contrast exceeds this,
+        applying to the simulated traces the same cut you would apply when
+        choosing which measured chunks to analyse. Excluded trials are counted
+        (:attr:`BenchmarkReport.n_excluded`) and reported, never silently
+        dropped, because the rejection rate is itself a result -- at a given
+        rate and trace length it is the probability that a real chunk is usable
+        at all.
+
+        Strongly recommended whenever the sweep reaches low rates. A trace short
+        enough to contain no flips has no identifiable two-branch model, and the
+        decoder fabricates hundreds of events from noise; pooling those makes
+        purity appear to collapse at low rate when the reconstruction is fine.
     bursts : QuasiparticleBurstModel, optional
         Superimpose quasiparticle bursts on each surrogate. Pass one if the
         measurement contains bursts: crowded flips dominate the efficiency loss
@@ -937,8 +990,18 @@ def benchmark_reconstruction(
     report = BenchmarkReport(
         fidelity=fidelity, trials=_run(rate, seed), tol=tol, scale=scale,
         noise_scale=noise_scale, rate_jitter=bool(rate_jitter),
-        warnings=warnings,
+        select_min_contrast=select_min_contrast, warnings=warnings,
     )
+    if report.n_excluded:
+        report.warnings.append(
+            f"{report.n_excluded}/{len(report.trials)} surrogates were "
+            f"rejected by select_min_contrast={select_min_contrast:g} and are "
+            f"not in the scores below. That rejection rate is a result in its "
+            f"own right: {100 * (1 - report.selection_fraction):.0f}% of "
+            f"traces this length at this rate would be unusable.")
+    if not report.selected:
+        report.warnings.append(
+            "no surrogate passed select_min_contrast, so every score is nan.")
     # Closure is the one test that the replay reproduced the measurement, and
     # it is only computable once the trials are in. It drifts above 1 at
     # marginal contrast, where the mixture fit sits on the optimistic side of
@@ -1115,6 +1178,7 @@ def sweep_burst_size(
     burst_mu: float = 1.2e-3,
     burst_sigma: float = 0.4e-3,
     trial_samples: int | None = None,
+    select_min_contrast: float | None = None,
     detect_kwargs: dict | None = None,
 ) -> list[BurstSizePoint]:
     """Burst-level detection efficiency and multiplicity bias vs burst size.
@@ -1164,6 +1228,11 @@ def sweep_burst_size(
     burst_tau, burst_mu, burst_sigma : float
         EMG shape of the burst arrival profile; defaults are the reference
         device's.
+    select_min_contrast : float, optional
+        Skip a surrogate whose re-fitted contrast falls below this, exactly as
+        in :func:`benchmark_reconstruction`. Its bursts contribute to neither
+        the numerator nor the denominator, so the efficiency is conditioned on
+        a usable trace rather than diluted by unusable ones.
     detect_kwargs : dict, optional
         Passed to :func:`~qpd.reconstruction.bursts.detect_bursts`, e.g.
         ``{"min_flips": 4}`` to trade efficiency for a lower false-burst rate.
@@ -1204,6 +1273,11 @@ def sweep_burst_size(
                 seed=int(seed) + k, n_samples=n, rate_hz=rate,
                 bursts=model, return_bursts=True)
             rec = _reconstruct(sim_iq, fidelity)
+            if select_min_contrast is not None:
+                c = np.asarray(rec.contrast, dtype=float)
+                c_med = float(np.median(c)) if c.size else float(rec.contrast)
+                if not (np.isfinite(c_med) and c_med > float(select_min_contrast)):
+                    continue
             found = detect_bursts(rec.flip_times - fidelity.t0, rate,
                                   duration=duration, **dk)
             for m in match_bursts(truth, found):

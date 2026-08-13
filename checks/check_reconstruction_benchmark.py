@@ -34,6 +34,8 @@ Covers:
  13. The three diagnostic figures render.
  14a. corrected_rate_hz survives a post-decode confidence cut.
  14c. No labelled markers on the figures; the numbers are functions instead.
+ 14d. Acceptance cuts on surrogates, mirroring the cuts applied to real
+      chunks -- and the low-rate purity artefact they remove.
  14b. Error-bar semantics: scatter vs precision-of-estimate, and that pooling
       weights trials by evidence rather than one-vote-each.
  14. The two decoding rules: identical at good contrast, and diverging in the
@@ -540,6 +542,65 @@ def main() -> int:
           abs(burst_n50(list(reversed(crossing))) - b50) < 1e-9)
     check("burst_n50 gives nan when the curve never reaches 50%",
           not np.isfinite(burst_n50([_pt(2, 0.05), _pt(4, 0.2), _pt(8, 0.3)])))
+
+    # --- 14d. acceptance cuts on surrogates ---------------------------------
+    print("\n14d. select_min_contrast mirrors the cut applied to real chunks")
+    # A short trace at a low rate can contain NO flips. With no transition the
+    # two-branch model is unidentifiable: EM splits one blob into a spurious
+    # pair and the decoder fabricates hundreds of events from noise. Pooling
+    # those is what makes purity look like it collapses at low rate.
+    # n_g = 0.14 gives contrast 2.42 at 10 kSa/s, matching the measured trace
+    # this was found on (2.38), so a 1.7 cut discriminates between usable and
+    # unfittable surrogates instead of rejecting every one.
+    fsel = characterize_trace(
+        build_static_scenario(n_g=0.14, duration=1.0, sample_rate=1e4,
+                              tunnel_rate_hz=66.0).simulate(seed=1).iq, 1e4)
+    check("the test bias sits above the cut so the cut can discriminate",
+          fsel.contrast_median > 1.7, f"contrast {fsel.contrast_median:.2f}")
+    empty = 0
+    for sd in range(30):
+        _, tr_ = fsel.synthesize(seed=sd, rate_hz=1.0)
+        empty += int(tr_.size == 0)
+    check("at 1 Hz on a 1 s trace many surrogates hold no flips at all",
+          empty > 3, f"{empty}/30 empty")
+
+    raw = sweep_rate(fsel, [1.0], n_trials=30)[0]
+    cut = sweep_rate(fsel, [1.0], n_trials=30, select_min_contrast=1.7)[0]
+    print(f"     1 Hz purity: {raw.purity_clustered[0]:.3f} (all) -> "
+          f"{cut.purity_clustered[0]:.3f} (contrast > 1.7), "
+          f"{len(cut.selected)}/{len(cut.trials)} accepted")
+    check("the cut removes the low-rate purity artefact",
+          cut.purity_clustered[0] > raw.purity_clustered[0] + 0.2,
+          f"{raw.purity_clustered[0]:.3f} -> {cut.purity_clustered[0]:.3f}")
+    check("rejected surrogates are counted, not silently dropped",
+          cut.n_excluded == len(cut.trials) - len(cut.selected)
+          and cut.n_excluded > 0
+          and any("rejected by select_min_contrast" in w for w in cut.warnings),
+          f"{cut.n_excluded} excluded")
+    check("selection_fraction reports the usable fraction",
+          abs(cut.selection_fraction
+              - len(cut.selected) / len(cut.trials)) < 1e-12)
+    check("summary states what was accepted",
+          "accepted" in cut.summary())
+
+    # Where nothing is rejected the cut must change nothing at all.
+    hi_a = sweep_rate(fsel, [100.0], n_trials=12, seed=5)[0]
+    hi_b = sweep_rate(fsel, [100.0], n_trials=12, seed=5,
+                      select_min_contrast=1.7)[0]
+    check("a cut that rejects nothing changes nothing",
+          hi_b.n_excluded == 0
+          and abs(hi_a.purity_clustered[0] - hi_b.purity_clustered[0]) < 1e-12
+          and abs(hi_a.efficiency_clustered[0]
+                  - hi_b.efficiency_clustered[0]) < 1e-12)
+    # An impossible cut must yield nan rather than a fabricated number.
+    none_pass = sweep_rate(fsel, [100.0], n_trials=6, select_min_contrast=1e6)[0]
+    check("an all-rejecting cut gives nan, not a fabricated score",
+          not np.isfinite(none_pass.purity_clustered[0])
+          and any("no surrogate passed" in w for w in none_pass.warnings))
+    # And it reaches the burst sweep too.
+    bp_ = sweep_burst_size(fsel, [8], n_trials=2, select_min_contrast=1e6)
+    check("select_min_contrast reaches sweep_burst_size",
+          bp_[0].n_bursts == 0, f"{bp_[0].n_bursts} bursts kept")
 
     # --- 14b. error-bar semantics -------------------------------------------
     print("\n14b. Error bars: scatter vs precision of the estimate")

@@ -1157,6 +1157,38 @@ plot_efficiency_vs_rate(reports)
 
 ![Flip efficiency vs background rate](figures/efficiency_vs_rate.png)
 
+### Apply your acceptance cut to the surrogates too
+
+If purity appears to **collapse at low rate**, this is why. A trace short
+enough to contain *no* flips has no identifiable two-branch model: with no
+transition to see, EM splits a single blob into a spurious pair (contrast
+~0.9, §6.1) and the decoder segments noise into hundreds of fabricated events.
+On a 1 s, 10 kSa/s trace at contrast 2.4, **36% of 1 Hz surrogates hold no
+flips**, and pooling them drags purity to 0.08 while the reconstruction itself
+is fine.
+
+The fix is to subject a surrogate to the same acceptance cut you would apply to
+a real chunk:
+
+```python
+sweep_rate(fid, RATES, select_min_contrast=1.7)     # your chunk-selection cut
+```
+
+| rate | purity, no cut | purity, contrast > 1.7 | accepted |
+|---|---|---|---|
+| 1 Hz | 0.088 | **1.000** | 25/40 |
+| 3 Hz | 0.799 | **1.000** | 38/40 |
+| 10 Hz | 1.000 | 1.000 | 40/40 |
+| ≥ 30 Hz | unchanged | unchanged | 40/40 |
+
+Above 10 Hz nothing is rejected and nothing changes — the cut only bites where
+the model was unfittable to begin with.
+
+**The rejection rate is a result, not bookkeeping.** `n_excluded`,
+`selection_fraction` and a warning report it, because "38% of 1 s traces are
+unusable at 1 Hz" is exactly what you need to know when planning a measurement.
+Scores are `nan` if nothing passes, never fabricated.
+
 **There is no "measured rate" marker on this figure, deliberately.** One trace
 admits three different rates and a single labelled line cannot say which it
 means: `fidelity.rate_hz` counts *posterior*-threshold crossings before any
