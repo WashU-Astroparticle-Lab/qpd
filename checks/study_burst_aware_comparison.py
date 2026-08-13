@@ -68,7 +68,8 @@ def main():
     # -- background guard -----------------------------------------------
     print(f"\nbackground guard ... ({time.perf_counter()-T0:.0f}s)",
           flush=True)
-    for label, kw in [("before", {}), ("after", {"burst_aware": True})]:
+    for label, kw in [("before", {"burst_aware": False}),
+                      ("after", {"burst_aware": True})]:
         n_false, effs, purs = 0, [], []
         for k in range(40):
             iq, truth = fid_base.synthesize(seed=5000 + k, rate_hz=BG)
@@ -103,7 +104,8 @@ def main():
             w = (t >= lo) & (t <= hi)
             vis.append(np.count_nonzero(np.diff(par[w.nonzero()[0]])))
             tru.append(b.n_qp)
-            for kw, out in [({}, dec_b), ({"burst_aware": True}, dec_a)]:
+            for kw, out in [({"burst_aware": False}, dec_b),
+                           ({"burst_aware": True}, dec_a)]:
                 rec = reconstruct_parity_flips_static(iq, FS, **kw)
                 out.append(np.count_nonzero((rec.flip_times >= lo)
                                             & (rec.flip_times <= hi)))

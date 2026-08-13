@@ -121,56 +121,150 @@ def forward_backward_regime(
     """Posterior over the four states and the total log-likelihood.
 
     Same scaled-domain recursion as the two-state
-    :func:`~qpd.reconstruction.hmm.forward_backward`, with the 4-vector
-    algebra done by small NumPy matmuls per step.
+    :func:`~qpd.reconstruction.hmm.forward_backward`, specialised to scalar
+    arithmetic for the same reason: per-step NumPy calls cost an order of
+    magnitude more than the sixteen multiplies they replace.
 
     Returns ``(posterior, log_likelihood)`` with posterior of shape
     ``(4, n)``.
     """
     e, log_scale = _scaled_emissions4(log_emit4)
-    n = e.shape[1]
-    t_fwd = np.asarray(trans, dtype=float)
+    e0, e1, e2, e3 = (row.tolist() for row in e)
+    n = len(e0)
+    (t00, t01, t02, t03), (t10, t11, t12, t13), \
+        (t20, t21, t22, t23), (t30, t31, t32, t33) = np.asarray(
+            trans, dtype=float).tolist()
 
-    fwd = np.empty((n, 4))
-    a = 0.25 * e[:, 0]
-    s = a.sum()
+    fwd0 = [0.0] * n
+    fwd1 = [0.0] * n
+    fwd2 = [0.0] * n
+    fwd3 = [0.0] * n
+    a0, a1, a2, a3 = 0.25 * e0[0], 0.25 * e1[0], 0.25 * e2[0], 0.25 * e3[0]
+    s = a0 + a1 + a2 + a3
     log_scale += log(s)
-    a /= s
-    fwd[0] = a
+    a0 /= s
+    a1 /= s
+    a2 /= s
+    a3 /= s
+    fwd0[0], fwd1[0], fwd2[0], fwd3[0] = a0, a1, a2, a3
     for k in range(1, n):
-        a = (a @ t_fwd) * e[:, k]
-        s = a.sum()
+        b0 = (a0 * t00 + a1 * t10 + a2 * t20 + a3 * t30) * e0[k]
+        b1 = (a0 * t01 + a1 * t11 + a2 * t21 + a3 * t31) * e1[k]
+        b2 = (a0 * t02 + a1 * t12 + a2 * t22 + a3 * t32) * e2[k]
+        b3 = (a0 * t03 + a1 * t13 + a2 * t23 + a3 * t33) * e3[k]
+        s = b0 + b1 + b2 + b3
         log_scale += log(s)
-        a /= s
-        fwd[k] = a
+        a0, a1, a2, a3 = b0 / s, b1 / s, b2 / s, b3 / s
+        fwd0[k], fwd1[k], fwd2[k], fwd3[k] = a0, a1, a2, a3
 
     post = np.empty((4, n))
-    b = np.ones(4)
-    post[:, n - 1] = fwd[n - 1]
+    b0 = b1 = b2 = b3 = 1.0
+    post[0, n - 1] = fwd0[n - 1]
+    post[1, n - 1] = fwd1[n - 1]
+    post[2, n - 1] = fwd2[n - 1]
+    post[3, n - 1] = fwd3[n - 1]
     for k in range(n - 2, -1, -1):
-        b = t_fwd @ (b * e[:, k + 1])
-        b /= b.sum()
-        g = fwd[k] * b
-        post[:, k] = g / g.sum()
+        c0 = b0 * e0[k + 1]
+        c1 = b1 * e1[k + 1]
+        c2 = b2 * e2[k + 1]
+        c3 = b3 * e3[k + 1]
+        b0 = t00 * c0 + t01 * c1 + t02 * c2 + t03 * c3
+        b1 = t10 * c0 + t11 * c1 + t12 * c2 + t13 * c3
+        b2 = t20 * c0 + t21 * c1 + t22 * c2 + t23 * c3
+        b3 = t30 * c0 + t31 * c1 + t32 * c2 + t33 * c3
+        s = b0 + b1 + b2 + b3
+        b0 /= s
+        b1 /= s
+        b2 /= s
+        b3 /= s
+        g0 = fwd0[k] * b0
+        g1 = fwd1[k] * b1
+        g2 = fwd2[k] * b2
+        g3 = fwd3[k] * b3
+        s = g0 + g1 + g2 + g3
+        post[0, k] = g0 / s
+        post[1, k] = g1 / s
+        post[2, k] = g2 / s
+        post[3, k] = g3 / s
     return post, log_scale
 
 
 def viterbi_regime(log_emit4: np.ndarray, trans: np.ndarray) -> np.ndarray:
-    """Most likely four-state sequence, as an int8 array of state indices."""
-    log_t = np.log(np.asarray(trans, dtype=float))
-    n = log_emit4.shape[1]
-    back = np.empty((n, 4), dtype=np.int8)
-    d = log(0.25) + log_emit4[:, 0]
+    """Most likely four-state sequence, as an int8 array of state indices.
+
+    Scalar-specialised like the forward-backward above; the sixteen
+    max-comparisons per step beat a NumPy argmax on a (4, 4) array by an
+    order of magnitude.
+    """
+    lt = np.log(np.asarray(trans, dtype=float)).tolist()
+    (t00, t01, t02, t03), (t10, t11, t12, t13), \
+        (t20, t21, t22, t23), (t30, t31, t32, t33) = lt
+    l0, l1, l2, l3 = (row.tolist() for row in log_emit4)
+    n = len(l0)
+
+    back = [[0] * 4 for _ in range(n)]
+    d0 = log(0.25) + l0[0]
+    d1 = log(0.25) + l1[0]
+    d2 = log(0.25) + l2[0]
+    d3 = log(0.25) + l3[0]
     for k in range(1, n):
-        score = d[:, None] + log_t
-        back[k] = np.argmax(score, axis=0)
-        d = score[back[k], np.arange(4)] + log_emit4[:, k]
+        bk = back[k]
+
+        m, i = d0 + t00, 0
+        v = d1 + t10
+        if v > m:
+            m, i = v, 1
+        v = d2 + t20
+        if v > m:
+            m, i = v, 2
+        v = d3 + t30
+        if v > m:
+            m, i = v, 3
+        n0, bk[0] = m + l0[k], i
+
+        m, i = d0 + t01, 0
+        v = d1 + t11
+        if v > m:
+            m, i = v, 1
+        v = d2 + t21
+        if v > m:
+            m, i = v, 2
+        v = d3 + t31
+        if v > m:
+            m, i = v, 3
+        n1, bk[1] = m + l1[k], i
+
+        m, i = d0 + t02, 0
+        v = d1 + t12
+        if v > m:
+            m, i = v, 1
+        v = d2 + t22
+        if v > m:
+            m, i = v, 2
+        v = d3 + t32
+        if v > m:
+            m, i = v, 3
+        n2, bk[2] = m + l2[k], i
+
+        m, i = d0 + t03, 0
+        v = d1 + t13
+        if v > m:
+            m, i = v, 1
+        v = d2 + t23
+        if v > m:
+            m, i = v, 2
+        v = d3 + t33
+        if v > m:
+            m, i = v, 3
+        n3, bk[3] = m + l3[k], i
+
+        d0, d1, d2, d3 = n0, n1, n2, n3
 
     path = np.empty(n, dtype=np.int8)
-    state = int(np.argmax(d))
+    state = max(range(4), key=(d0, d1, d2, d3).__getitem__)
     path[n - 1] = state
     for k in range(n - 1, 0, -1):
-        state = back[k, state]
+        state = back[k][state]
         path[k - 1] = state
     return path
 
