@@ -28,6 +28,38 @@ qpd = QPD(e_j_hz=8.335e9, e_c_hz=0.695e9)
 qpd.plot_all()
 ```
 
+## LED-pulsed waveforms
+
+`LEDPulseModel` generates synchronized, independent chunks: the first pulse is
+at 50 ms, followed by 50 µs ON and 300 ms OFF. Each pulse draws a Poisson
+tunneling count and reuses the existing Gaussian-plus-exponential time profile,
+with excitation spread over ON and delays constrained to be nonnegative.
+Offset charge is redrawn uniformly on `[-0.5, 0.5)` at each rising edge and at
+independent random jumps averaging one per minute. Quiescent tunneling remains
+active at 20 Hz throughout ON and OFF.
+
+```python
+from qpd import QPD, ResonatorConfig, VNASimulator, LEDPulseModel, led_count_sweep
+
+device = QPD(e_j_hz=6.95e9, e_c_hz=0.695e9)
+device.coupling_g_hz = 40e6
+sim = VNASimulator(
+    qpd=device, resonator=ResonatorConfig(f_r=6.936e9, q_i=1e5, q_c_abs=1.2e5),
+    f_drive=6.936437e9, sample_rate=1e5,
+    led_pulsing=LEDPulseModel(expected_n_qp=10),
+)
+result = sim.simulate(duration=5.0, seed=0)
+count_settings = led_count_sweep()  # zero + 31 log-spaced means from 1 to 1000
+```
+
+`expected_n_qp` counts **tunneling events per pulse**, not physical particles.
+Zero disables LED-induced tunneling while preserving LED charge resets and
+the quiescent contribution. Use `result.led` for pulse and charge-reset truth,
+and `result.flip_times` for all recorded parity flips. Each simulation call
+starts a fresh chunk with the same LED phase; change the seed for a new
+realization. See [`notebooks/led_pulsing.ipynb`](notebooks/led_pulsing.ipynb)
+for timing controls, waveform plots, and an optional count sweep.
+
 ## Reconstruction
 
 Given a readout trace, recover when the parity flipped. Blind by default: the
@@ -113,6 +145,7 @@ bound. [`docs/reconstruction.md`](docs/reconstruction.md) §12d has the figures.
 ## Verification
 
 ```bash
+python checks/check_led_pulsing.py              # LED pulse / count / charge checks
 python checks/check_parity_reconstruction.py     # reconstruction regression gate
 python checks/check_reconstruction_benchmark.py  # surrogate-replay benchmark gate
 python checks/check_readout_window.py            # dressed-S21 + lock-in window

@@ -8,6 +8,7 @@ import numpy as np
 
 from qpd.theory.transmon import QPD
 
+from .led_pulsing import LEDPulseModel, LEDTruth
 from .noise import NoiseModel, WhiteGaussianNoise
 from .offset_charge import ConstantNg, OffsetChargeModel
 from .parity import EVEN, generate_parity_trajectory
@@ -26,6 +27,7 @@ class SimResult:
     flip_times: np.ndarray = field(
         default_factory=lambda: np.empty(0, dtype=float)
     )
+    led: LEDTruth | None = None
 
     @property
     def iq(self) -> np.ndarray:
@@ -34,10 +36,6 @@ class SimResult:
 
 def _default_noise() -> NoiseModel:
     return WhiteGaussianNoise(sigma=0.0)
-
-
-def _default_ng() -> OffsetChargeModel:
-    return ConstantNg(0.25)
 
 
 @dataclass
@@ -56,19 +54,28 @@ class VNASimulator:
     point at which the complex S21 (the I/Q sample) is read. Park the LO
     anywhere — e.g. a kHz off the resonator line — by setting
     ``f_drive != resonator.f_r``.
+
+    Set ``led_pulsing=LEDPulseModel(...)`` for synchronized LED acquisition.
+    Every call simulates an independent chunk, with the first pulse at 50 ms
+    by default. The LED model supplies both the charge-reset trajectory and
+    tunneling bursts, so it cannot be combined with ``offset_charge`` or
+    ``quasiparticle_bursts``. The background rates remain active during ON
+    and OFF; their defaults give 20 parity flips/s, independent of the LED.
+    Outside LED mode, omitted ``offset_charge`` means ``ConstantNg(0.25)``.
     """
 
     qpd: QPD
     resonator: ResonatorConfig
     f_drive: float
     sample_rate: float
-    gamma_even_to_odd: float
-    gamma_odd_to_even: float
+    gamma_even_to_odd: float = 20.0
+    gamma_odd_to_even: float = 20.0
     noise: NoiseModel = field(default_factory=_default_noise)
-    offset_charge: OffsetChargeModel = field(default_factory=_default_ng)
+    offset_charge: OffsetChargeModel | None = None
     quasiparticle_bursts: QuasiparticleBurstModel | None = None
     n_g_grid_points: int = 401
     charge_cutoff: int = 30
+    led_pulsing: LEDPulseModel | None = None
 
     def _chi_grid(self, n_g_lo: float, n_g_hi: float):
         # Margin to avoid edge-extrapolation when the trajectory grazes a bound.
@@ -109,7 +116,22 @@ class VNASimulator:
             chi_odd[k] = chi_o[0]
         return grid, chi_even, chi_odd
 
-    def simulate(self, duration: float, seed: int | None = None) -> SimResult:
+    def simulate(self, duration: float = 5.0, seed: int | None = None) -> SimResult:
+        """Simulate one independent chunk (5 s by default).
+
+        Reusing a seed reproduces a chunk; use different seeds for independent
+        realizations with the same LED timing. ``result.led`` records pulse
+        windows and charge resets. Burst truth includes complete pulse counts
+        and late tails, while ``flip_times`` contains only observed-window
+        parity flips, including the quiescent background.
+        """
+        if self.led_pulsing is not None and (
+            self.offset_charge is not None or self.quasiparticle_bursts is not None
+        ):
+            raise ValueError(
+                "led_pulsing supplies offset_charge and quasiparticle_bursts; "
+                "leave both unset in LED mode"
+            )
         rng = np.random.default_rng(seed)
         n = int(round(duration * self.sample_rate))
         if n < 2:
@@ -117,12 +139,22 @@ class VNASimulator:
         dt = 1.0 / self.sample_rate
         t = np.arange(n) * dt
 
-        n_g_t = self.offset_charge.evaluate(t)
-
-        if self.quasiparticle_bursts is not None:
-            burst_event_times, bursts = self.quasiparticle_bursts.sample(rng)
+        led = None
+        if self.led_pulsing is not None:
+            led = self.led_pulsing.sample(duration, rng)
+            n_g_t = led.evaluate_n_g(t)
+            burst_event_times, bursts = led.event_times, led.bursts
         else:
-            burst_event_times, bursts = None, []
+            charge_model = (
+                self.offset_charge
+                if self.offset_charge is not None
+                else ConstantNg(0.25)
+            )
+            n_g_t = charge_model.evaluate(t)
+            if self.quasiparticle_bursts is not None:
+                burst_event_times, bursts = self.quasiparticle_bursts.sample(rng)
+            else:
+                burst_event_times, bursts = None, []
 
         parity_t, flip_times = generate_parity_trajectory(
             t,
@@ -152,4 +184,5 @@ class VNASimulator:
             n_g=n_g_t,
             bursts=bursts,
             flip_times=flip_times,
+            led=led,
         )
