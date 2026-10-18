@@ -1,5 +1,6 @@
 """VNA S21 timeseries simulator for QPD transmons."""
 
+from qpd.simulator.led_pulsing import LEDPulseModel, LEDTruth, led_count_sweep
 from qpd.simulator.noise import NoiseModel, WhiteGaussianNoise
 from qpd.simulator.offset_charge import (
     ChargeJumpEvents,
@@ -23,6 +24,9 @@ from qpd.simulator.vna_simulator import SimResult, VNASimulator
 __all__ = [
     "VNASimulator",
     "SimResult",
+    "LEDPulseModel",
+    "LEDTruth",
+    "led_count_sweep",
     "ResonatorConfig",
     "notch_s21",
     "NoiseModel",
