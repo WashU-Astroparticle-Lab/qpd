@@ -44,7 +44,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.stats import poisson
 
-__all__ = ["DetectedBurst", "detect_bursts", "match_bursts", "BurstMatch"]
+__all__ = ["DetectedBurst", "detect_bursts", "match_bursts", "BurstMatch",
+           "flag_charge_coincidences"]
 
 
 @dataclass
@@ -57,6 +58,12 @@ class DetectedBurst:
     p_value: float  # trials-corrected background probability
     flip_times: np.ndarray = field(
         default_factory=lambda: np.empty(0, float))
+    # Set by flag_charge_coincidences: this burst overlaps a detected
+    # offset-charge event. A label, not a veto -- impact events produce
+    # charge jumps and quasiparticle bursts together, so for a burst search
+    # this is the *most* interesting category, but the multiplicity near the
+    # boundary is less trustworthy (flips at the boundary are suppressed).
+    charge_coincident: bool = False
 
     @property
     def span(self) -> float:
@@ -197,6 +204,29 @@ class BurstMatch:
     def bias(self) -> int:
         """Detected minus true multiplicity (negative = flips lost)."""
         return self.n_qp_detected - self.n_qp_true
+
+
+def flag_charge_coincidences(
+    bursts: list[DetectedBurst],
+    charge_event_times: np.ndarray,
+    *,
+    pad: float = 2e-3,
+) -> list[DetectedBurst]:
+    """Mark bursts that overlap a detected offset-charge event, in place.
+
+    Impact events reconfigure the offset charge *and* release
+    quasiparticles, so a burst coincident with a charge event (take
+    ``charge_event_times`` from
+    ``StaticReconstructionResult.charge_jump_times``) is a physics label,
+    not a discard: "parity activity at a charge reconfiguration". The pad
+    covers the boundary guard and the event's localization blur. Returns
+    the same list for chaining.
+    """
+    t = np.asarray(charge_event_times, dtype=float)
+    for b in bursts:
+        b.charge_coincident = bool(
+            t.size and np.any((t >= b.t_start - pad) & (t <= b.t_end + pad)))
+    return bursts
 
 
 def match_bursts(

@@ -59,7 +59,12 @@ from qpd.reconstruction.bursts import (
     BurstMatch,
     DetectedBurst,
     detect_bursts,
+    flag_charge_coincidences,
     match_bursts,
+)
+from qpd.reconstruction.charge_events import (
+    ChargeEventDiagnostics,
+    detect_charge_events,
 )
 from qpd.reconstruction.emission import (
     EmissionModel,
@@ -137,8 +142,12 @@ __all__ = [
     # burst finding and burst-level diagnostics
     "detect_bursts",
     "match_bursts",
+    "flag_charge_coincidences",
     "DetectedBurst",
     "BurstMatch",
+    # offset-charge event detection (static path)
+    "detect_charge_events",
+    "ChargeEventDiagnostics",
     "sweep_rate",
     "sweep_burst_size",
     "BurstSizePoint",

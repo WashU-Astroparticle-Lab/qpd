@@ -142,6 +142,9 @@ def build_static_scenario(
     g_hz: float = 150e6,
     burst_rate_hz: float = 0.0,
     burst_n_qp: float | np.ndarray = 15.0,
+    burst_times: np.ndarray | None = None,
+    charge_jump_rate_hz: float = 0.0,
+    charge_jumps: tuple[np.ndarray, np.ndarray] | None = None,
     sample_rate: float = SAMPLE_RATE,
     seed: int = 0,
     label: str = "",
@@ -154,6 +157,13 @@ def build_static_scenario(
     Best contrast is at ``n_g = 0`` (mod 0.5); ``n_g = 0.25`` (mod 0.5) is the
     parity-blind charge, where the two branches coincide and no algorithm can
     recover the flips.
+
+    ``charge_jumps`` pins jump times and amplitudes explicitly (as in
+    :func:`build_scenario`); otherwise jumps are drawn at
+    ``charge_jump_rate_hz`` with amplitudes uniform on (-0.5, 0.5). A jump
+    moves *both* blob centres -- here it is not a ramp-phase nuisance but a
+    change of the bias point itself, including possibly onto the parity-blind
+    charge.
     """
     qpd = QPD(e_j_hz=e_j_hz, e_c_hz=e_c_hz)
     qpd.coupling_g_hz = g_hz
@@ -166,22 +176,43 @@ def build_static_scenario(
                                 phi=0.03, a=0.5, alpha=0.4, tau=50e-9)
 
     rng = np.random.default_rng(seed + 991)
+
+    offset_charge = ConstantNg(n_g)
+    if charge_jumps is not None:
+        jump_t = np.asarray(charge_jumps[0], dtype=float)
+        jump_d = np.asarray(charge_jumps[1], dtype=float)
+    else:
+        n_jump = rng.poisson(charge_jump_rate_hz * duration)
+        jump_t = np.sort(rng.uniform(0.0, duration, n_jump))
+        jump_d = rng.uniform(-0.5, 0.5, n_jump)
+    if jump_t.size:
+        offset_charge = offset_charge + ChargeJumpEvents(times=jump_t,
+                                                         deltas=jump_d)
+
     bursts = None
-    if burst_rate_hz > 0:
+    if burst_times is not None:
+        onsets = np.asarray(burst_times, dtype=float)
+    elif burst_rate_hz > 0:
         onsets = np.sort(rng.uniform(0.0, duration,
                                      rng.poisson(burst_rate_hz * duration)))
-        if onsets.size:
-            bursts = QuasiparticleBurstModel(times=onsets, tau=3.7e-3,
-                                             mu=1.2e-3, sigma=0.4e-3,
-                                             expected_n_qp=burst_n_qp)
+    else:
+        onsets = np.empty(0)
+    if onsets.size:
+        n_qp = burst_n_qp
+        if np.ndim(n_qp) > 0:
+            n_qp = np.resize(np.asarray(n_qp, dtype=float), onsets.size)
+        bursts = QuasiparticleBurstModel(times=onsets, tau=3.7e-3,
+                                         mu=1.2e-3, sigma=0.4e-3,
+                                         expected_n_qp=n_qp)
 
     sim = VNASimulator(
         qpd=qpd, resonator=resonator, f_drive=FR + 1e3,
         sample_rate=sample_rate,
         gamma_even_to_odd=tunnel_rate_hz, gamma_odd_to_even=tunnel_rate_hz,
         noise=WhiteGaussianNoise(sigma=sigma),
-        offset_charge=ConstantNg(n_g), quasiparticle_bursts=bursts,
+        offset_charge=offset_charge, quasiparticle_bursts=bursts,
     )
     return Scenario(sim=sim, duration=duration, fold_period=float("nan"),
                     ramp_period=float("nan"), half_pairs_per_ramp=float("nan"),
+                    jump_times=jump_t, jump_deltas=jump_d,
                     label=label or f"static n_g={n_g}")
