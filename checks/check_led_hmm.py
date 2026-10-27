@@ -94,6 +94,12 @@ def f1(tp, fp, fn):
     return 2 * tp / max(2 * tp + fp + fn, 1)
 
 
+def summary(tp, fp, fn):
+    """Efficiency (matched / true), purity (matched / reported) and F1 of pooled counts."""
+    return (f"eff {tp / max(tp + fn, 1):.3f}, pur {tp / max(tp + fp, 1):.3f}, F1 {f1(tp, fp, fn):.3f}, "
+            f"FP {fp}, FN {fn}")
+
+
 def phase_error(est, true):
     return ((est - true + PERIOD / 2) % PERIOD) - PERIOD / 2
 
@@ -127,6 +133,7 @@ def main():
             tot["plain"] += counts(truth, predict_led_hmm(iq, FS, first_pulse_time_s=first)[0])
             tot["sf"] += counts(truth, predict_led_hmm(iq, FS, first_pulse_time_s=first, **SF)[0])
         p, q = tot["plain"], tot["sf"]
+        print(f"    SNR_max {snr:g}  plain:  {summary(*p)}\n    SNR_max {snr:g}  HMM-SF: {summary(*q)}")
         detail = f"F1 plain {f1(*p):.3f} -> HMM-SF {f1(*q):.3f}; false positives {p[1]} -> {q[1]}"
         if min_f1 is not None:
             check(f"SNR_max {snr:g}: HMM-SF F1 >= {min_f1}", f1(*q) >= min_f1, detail)
@@ -149,6 +156,8 @@ def main():
     errs = np.abs(errs) * 1e6
     check("'hmm' phase within 100 us on >= 5 of 6 records", np.sum(errs <= 100) >= 5,
           "errors (us): " + ", ".join(f"{e:.0f}" for e in errs))
+    print(f"    SNR_max 3, vetoed  known phase: {summary(*f1s['known'])}\n"
+          f"    SNR_max 3, vetoed  blind phase: {summary(*f1s['blind'])}")
     k, b = f1(*f1s["known"]), f1(*f1s["blind"])
     check("blind HMM-SF F1 within 0.03 of known-phase HMM-SF", b >= k - 0.03, f"known {k:.3f}, blind {b:.3f}")
 
