@@ -85,6 +85,12 @@ Alongside `qpd.theory` the package now carries three further subpackages:
   - With the LED phase known, call `predict_led_hmm(iq, fs, first_pulse_time_s=...)`.
   - With only the period known, call `predict_led_hmm_blind(iq, fs, ...)`. It estimates the phase from the waveform with `led_phase.estimate_led_phase`; `info['first_pulse_time_s']` is the schedule it used.
   - Recommended settings (HMM-SF) are `pin_quiet_rate=True, smooth_fit_s=2e-3, min_smoothed_contrast=2.5`. With every option off, the decoder is the plain per-window decode.
+- **`qpd.reconstruction.led_network`** (optional extra `.[led]`: torch, pandas, numba) — `reconstruct_parity_flips_led(iq, fs, first_pulse_time_s=...)` runs the trained LED flip network. It is a 9848-parameter dilated CNN with slot readout; its weights are `led_flip_network.pt`, shipped as package data.
+  - The network's inputs are computed by `inputs.py`. `hmm_channels` / `hmm_sf_channels` summarise the `led_hmm` posteriors. `record_inputs` gives the burst intensity `mu_hat` and the canonical I/Q rotation.
+  - Health flags live in `health.py`; any hard flag sets `result.degenerate`. With `fallback_hmmsf=True`, a record with a hard flag gets the HMM-SF flips instead.
+  - The network is trained for SNR 0.5–5 at 100 kHz with the `LEDPulseModel` schedule. Above SNR 6 it raises the hard flag `snr_above_trained_range`, because HMM-SF is better there.
+  - `qpd.reconstruction` exports it lazily, so importing the package never needs torch.
+  - `checks/check_led_network.py` is the gate: API contract, weights hash, accuracy vs HMM-SF, the high-SNR and coloured-noise guards.
 
 Verification lives in `checks/`: `check_parity_reconstruction.py` is the reconstruction regression gate (55 checks), `check_reconstruction_benchmark.py` gates the surrogate-replay benchmark (71 checks, including the calibration test that its predicted efficiency matches the ensemble actually measured over independent traces), `check_burst_aware_hmm.py` gates the burst-aware parity × regime decoder (recursion exactness, the multiplicity-improvement gate, and the background/false-burst guards), `check_led_hmm.py` gates the LED-window decoder and the blind LED-phase estimator (API contract, plain-decode equivalence, HMM-SF accuracy, phase recovery), `study_parity_reconstruction.py` runs the rate / noise / burst-crowding / device sweeps, `study_reconstruction_diagnostics.py` renders the §12d diagnostic figures into `docs/figures/`, and `study_burst_aware_comparison.py` renders the §12f before/after comparison.
 

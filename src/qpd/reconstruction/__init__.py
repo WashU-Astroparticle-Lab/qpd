@@ -24,6 +24,11 @@ toggles it -- with equal dwell times for the two states.
 :mod:`.analysis` scores a reconstruction against the truth, including the
 per-burst efficiency and timing bias as a function of how many tunnels land in
 the window.
+
+:func:`reconstruct_parity_flips_led` (in :mod:`.led_network`, optional extra
+``qpd[led]``) is a trained network for **LED-pulsed** records with a known
+trigger time. It is imported lazily, so ``import qpd.reconstruction`` never
+needs torch.
 """
 
 from qpd.reconstruction.analysis import (
@@ -148,3 +153,13 @@ __all__ = [
     "plot_burst_efficiency",
     "plot_burst_multiplicity",
 ]
+
+_LAZY = {"reconstruct_parity_flips_led", "LEDReconstructionResult"}
+
+
+def __getattr__(name):
+    # The LED network needs torch (optional extra), so it is imported on first use.
+    if name in _LAZY:
+        from qpd.reconstruction import led_network
+        return getattr(led_network, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

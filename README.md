@@ -142,10 +142,42 @@ background with a trials-corrected scan statistic (measured false-burst rate
 crowded tunnels cancel in pairs — so a large burst's quoted count is a lower
 bound. [`docs/reconstruction.md`](docs/reconstruction.md) §12d has the figures.
 
+## LED-pulsed records: network reconstruction
+
+For LED-pulsed records with a known trigger time, `reconstruct_parity_flips_led` runs a trained network. It has
+9848 parameters, ships with the package and runs on a CPU. It sees the whole record together with the LED schedule,
+per-sample summaries of the LED-window HMMs (`qpd.mlebench.led_hmm`) and a record-level burst-intensity estimate,
+and returns every flip, both in the quiet periods and inside the bursts. It needs the optional extra:
+
+```bash
+pip install -e ".[led]"      # torch, pandas, numba
+```
+
+```python
+from qpd.reconstruction import reconstruct_parity_flips_led, plot_trace_with_flips, score_flips
+
+rec = reconstruct_parity_flips_led(iq, 1e5, first_pulse_time_s=0.0731, fallback_hmmsf=True)
+rec.flip_times    # [s], sorted, after a fixed 300 us veto at each LED onset (the charge reset steps I/Q)
+rec.confidence    # per-flip presence probability in [0.5, 1]
+rec.degenerate    # True if a hard health flag fired (see rec.flags); fallback_hmmsf then returned HMM-SF instead
+rec.mu_hat, rec.rate_hz, rec.hmmsf_flip_times, rec.branch, rec.diagnostics
+
+plot_trace_with_flips(iq, 1e5, rec.flip_times, confidence=rec.confidence, window=(0.072, 0.086))
+score_flips(truth, rec.flip_times)
+```
+
+- **Schedule and sampling:** the network was trained on 1–5 s records at 100 kHz with the `LEDPulseModel` schedule (50 µs on, 300 ms off), per-sample SNR 0.5–5 and 0–10 tunnelling events per pulse.
+- **Where it beats HMM-SF:** inside that range it matches or beats HMM-SF, `predict_led_hmm(..., pin_quiet_rate=True, smooth_fit_s=2e-3, min_smoothed_contrast=2.5)`. The gain is largest when bursts are crowded.
+- **Above the trained SNR:** HMM-SF is better and the network degrades. That raises the hard flag `snr_above_trained_range`.
+- **Health checks:** a set of flags reports when a record is unlike the training data. Hard flags fire on coloured noise left unwhitened, an incoherent parity axis, no usable LED window, or disagreement with HMM-SF at high SNR.
+- **Coloured noise:** it is whitened automatically (`whiten='auto'`).
+- **Full example:** [`examples/example_led_network.py`](examples/example_led_network.py); `checks/check_led_network.py` is the gate.
+
 ## Verification
 
 ```bash
 python checks/check_led_pulsing.py              # LED pulse / count / charge checks
+python checks/check_led_network.py              # LED flip network (needs .[led])
 python checks/check_parity_reconstruction.py     # reconstruction regression gate
 python checks/check_reconstruction_benchmark.py  # surrogate-replay benchmark gate
 python checks/check_readout_window.py            # dressed-S21 + lock-in window

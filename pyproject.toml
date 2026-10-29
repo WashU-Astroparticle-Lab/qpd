@@ -29,9 +29,14 @@ open = ["qutip>=5.0"]
 # and the daq readout chain. Not on PyPI -- install from source:
 #   pip install "resonator_tools @ git+https://github.com/sebastianprobst/resonator_tools.git"
 fit = ["resonator_tools @ git+https://github.com/sebastianprobst/resonator_tools.git"]
+# Neural-network flip reconstruction for LED-pulsed records (qpd.reconstruction.led_network).
+# torch runs the network (CPU is enough); pandas is needed by qpd.mlebench, whose LED-window HMM supplies the inputs;
+# numba makes the burst-intensity estimate fast (a pure-Python fallback gives identical results, slowly).
+led = ["torch>=2.1", "pandas>=1.5", "numba>=0.57"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 "qpd.theory" = ["materials.yaml", "qpd.mplstyle"]
+"qpd.reconstruction.led_network" = ["led_flip_network.pt"]
