@@ -26,9 +26,9 @@ per-burst efficiency and timing bias as a function of how many tunnels land in
 the window.
 
 :func:`reconstruct_parity_flips_led` (in :mod:`.led_network`, optional extra
-``qpd[led]``) is a trained network for **LED-pulsed** records with a known
-trigger time. It is imported lazily, so ``import qpd.reconstruction`` never
-needs torch.
+``qpd[led]``) is a trained network for **LED-pulsed** records (with the LED
+trigger time, or with the phase estimated from the waveform). It is imported
+lazily, so ``import qpd.reconstruction`` never needs torch.
 """
 
 from qpd.reconstruction.analysis import (

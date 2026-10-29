@@ -144,8 +144,8 @@ bound. [`docs/reconstruction.md`](docs/reconstruction.md) §12d has the figures.
 
 ## LED-pulsed records: network reconstruction
 
-For LED-pulsed records with a known trigger time, `reconstruct_parity_flips_led` runs a trained network. It has
-9848 parameters, ships with the package and runs on a CPU. It sees the whole record together with the LED schedule,
+For LED-pulsed records, `reconstruct_parity_flips_led` runs a trained network. It has 9848 parameters, ships with
+the package and runs on a CPU. It sees the whole record together with the LED schedule,
 per-sample summaries of the LED-window HMMs (`qpd.mlebench.led_hmm`) and a record-level burst-intensity estimate,
 and returns every flip, both in the quiet periods and inside the bursts. It needs the optional extra:
 
@@ -164,7 +164,16 @@ rec.mu_hat, rec.rate_hz, rec.hmmsf_flip_times, rec.branch, rec.diagnostics
 
 plot_trace_with_flips(iq, 1e5, rec.flip_times, confidence=rec.confidence, window=(0.072, 0.086))
 score_flips(truth, rec.flip_times)
+
+# no trigger time logged: the LED phase is estimated from the waveform (qpd.mlebench.led_phase)
+rec = reconstruct_parity_flips_led(iq, 1e5)
+rec.first_pulse_time_s, rec.phase_estimated   # the estimate used for every input and for the veto
 ```
+
+**Without the trigger time.** The phase estimate is within tens of µs at SNR ≥ 2, and F1 is unchanged. At SNR 1,
+F1 drops by about 0.01. At SNR 0.5 the estimate is often off by about 1 ms, and F1 drops by 0.02–0.05. Even with the
+estimated phase, the network still beats HMM-SF given the true phase in most settings. Pass the trigger time when it
+is logged.
 
 - **Schedule and sampling:** the network was trained on 1–5 s records at 100 kHz with the `LEDPulseModel` schedule (50 µs on, 300 ms off), per-sample SNR 0.5–5 and 0–10 tunnelling events per pulse.
 - **Where it beats HMM-SF:** inside that range it matches or beats HMM-SF, `predict_led_hmm(..., pin_quiet_rate=True, smooth_fit_s=2e-3, min_smoothed_contrast=2.5)`. The gain is largest when bursts are crowded.

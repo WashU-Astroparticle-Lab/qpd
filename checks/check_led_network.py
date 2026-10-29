@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 """Verify the LED flip network, ``qpd.reconstruction.led_network.reconstruct_parity_flips_led``.
 
-Covers the API contract (input forms, the t0 axis, the post-onset veto, the derived branch, errors and the HMM-SF
-fallback), the bundled weights, accuracy on records from the LED-pulsing simulator against the HMM-SF baseline, and
-the coloured-noise guard (auto-whitening, and the hard flag when whitening is switched off).
+Covers the API contract (input forms, the t0 axis, the post-onset veto, the derived branch, the estimated LED phase
+when no trigger time is given, errors and the HMM-SF fallback), the bundled weights, accuracy on records from the
+LED-pulsing simulator against the HMM-SF baseline, the high-SNR guard, and the coloured-noise guard (auto-whitening,
+and the hard flag when whitening is switched off).
 
 Needs the optional extra (``pip install "qpd[led]"``); without torch it prints SKIP and exits 0.
 Run: ``python checks/check_led_network.py`` (exit 0 = all checks pass). Seeds are fixed.
@@ -87,7 +88,17 @@ def main():
           and int(np.count_nonzero(np.diff(b))) == r.flip_times.size - int(np.sum(np.round(r.flip_times * FS) == 0)))
     check("HMM-SF baseline flips reported", r.hmmsf_flip_times is not None and r.hmmsf_flip_times.size > 0)
     check("rate_hz and mu_hat are finite", np.isfinite(r.rate_hz) and np.isfinite(r.mu_hat))
-    raises("missing first_pulse_time_s raises", lambda: reconstruct_parity_flips_led(iq, FS))
+    check("known trigger time is reported back", not r.phase_estimated and r.first_pulse_time_s == fp)
+    rb = reconstruct_parity_flips_led(iq, FS)
+    err = ((rb.first_pulse_time_s - fp + PERIOD / 2) % PERIOD) - PERIOD / 2
+    _, _, f_known = eff_pur(truth, r.flip_times)
+    _, _, f_blind = eff_pur(truth, rb.flip_times)
+    check("first_pulse_time_s omitted: phase estimated within 0.3 ms", rb.phase_estimated and abs(err) < 3e-4, f"error {1e6*err:+.0f} us")
+    check("estimated-phase decode within 0.05 F1 of the known-phase decode", f_blind >= f_known - 0.05,
+          f"F1 {f_blind:.3f} vs {f_known:.3f}")
+    rbs = reconstruct_parity_flips_led(iq, FS, t0=10.0)
+    check("estimated phase reported on the t0 axis", np.isclose(rbs.first_pulse_time_s - 10.0, rb.first_pulse_time_s, rtol=0, atol=1e-9)
+          and np.allclose(rbs.flip_times - 10.0, rb.flip_times, rtol=0, atol=1e-9))
     raises("non-100 kHz sample rate raises", lambda: reconstruct_parity_flips_led(iq, 2e5, first_pulse_time_s=fp))
     rf = reconstruct_parity_flips_led(iq, 2e5, first_pulse_time_s=fp, fallback_hmmsf=True)
     check("non-100 kHz with fallback_hmmsf uses HMM-SF", rf.decoder == "hmm_sf_fallback" and rf.degenerate)

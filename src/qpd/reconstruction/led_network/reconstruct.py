@@ -26,6 +26,8 @@ class LEDReconstructionResult:
     n_samples: int = 0
     sample_rate: float = FS
     t0: float = 0.0
+    first_pulse_time_s: float = float('nan')   # [s] on the t0 axis: the given trigger time, or the estimate
+    phase_estimated: bool = False             # True when first_pulse_time_s was estimated from the waveform
     diagnostics: dict = field(default_factory=dict)
 
     @property
@@ -131,9 +133,9 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
                                  weights=None, threads=None) -> LEDReconstructionResult:
     """Recover parity-flip times from one **LED-pulsed** I/Q record with the trained network.
 
-    The LED pulses must follow the trained schedule (50 us on, 0.300 s off) with a known trigger time. Each pulse
-    redraws the offset charge and releases a burst of quasiparticles; the network sees the whole record and reports
-    every flip, quiet-period and burst alike.
+    The LED pulses must follow the trained schedule (50 us on, 0.300 s off). Each pulse redraws the offset charge and
+    releases a burst of quasiparticles; the network sees the whole record and reports every flip, quiet-period and
+    burst alike. The trigger time (``first_pulse_time_s``) is best given; without it the phase is estimated.
 
     Parameters
     ----------
@@ -141,8 +143,12 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
         One record, ``I + 1j*Q`` on a uniform grid. Trained on 1, 2 and 5 s records.
     sample_rate : float
         Sampling rate [Hz]. The network is 100 kHz only; anything else raises unless ``fallback_hmmsf=True``.
-    first_pulse_time_s : float
-        Time of the first LED pulse onset [s], on the same axis as ``t0``. Required.
+    first_pulse_time_s : float, optional
+        Time of the first LED pulse onset [s], on the same axis as ``t0`` (the LED trigger). If omitted, it is
+        estimated from the waveform with :func:`qpd.mlebench.led_phase.estimate_led_phase` (``method='hmm'``, the
+        period known) and every input -- LED cues, slot layout, HMM channels and the veto -- uses the estimate.
+        This costs accuracy, mostly at low SNR where the estimate is occasionally off by milliseconds; pass the
+        trigger time whenever it is logged. The value used is in ``result.first_pulse_time_s``.
     t0 : float
         Time of the first sample [s]; flip times are reported on this axis.
     led_period : float
@@ -165,26 +171,36 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
     -------
     LEDReconstructionResult
         ``flip_times`` and per-flip ``confidence``; ``degenerate`` / ``flags`` (health); ``rate_hz``; ``mu_hat``;
-        ``branch`` (derived); ``hmmsf_flip_times``; and the full ``diagnostics`` report.
+        ``first_pulse_time_s`` / ``phase_estimated``; ``branch`` (derived); ``hmmsf_flip_times``; and the full
+        ``diagnostics`` report.
 
     Examples
     --------
-    >>> rec = reconstruct_parity_flips_led(iq, 1e5, first_pulse_time_s=0.1234)
+    >>> rec = reconstruct_parity_flips_led(iq, 1e5, first_pulse_time_s=0.1234)   # trigger time logged
+    >>> rec = reconstruct_parity_flips_led(iq, 1e5)                              # phase estimated from the waveform
     >>> if not rec.degenerate:
     ...     plot_trace_with_flips(iq, 1e5, rec.flip_times, confidence=rec.confidence, window=(0.12, 0.14))
     """
-    if first_pulse_time_s is None:
-        raise ValueError('first_pulse_time_s is required (time of the first LED pulse onset, on the t0 axis)')
     if whiten not in ('auto', 'on', 'off'):
         raise ValueError("whiten must be 'auto', 'on' or 'off'")
     if fallback_hmmsf and not diagnostics:
         raise ValueError('fallback_hmmsf needs diagnostics (the hard flags)')
     t_start = time.perf_counter()
     I, Q = _split_iq(iq)
-    shift = float(t0); fp = float(first_pulse_time_s)-shift
-    fs, period = float(sample_rate), float(led_period)
+    shift = float(t0); fs, period = float(sample_rate), float(led_period)
     n = int(np.asarray(I).size); dur = n/fs
-    diag = dict(n_samples=n, duration_s=dur, sample_rate_hz=fs, first_pulse_time_s=fp, t0=shift, led_period_s=period,
+    estimated = first_pulse_time_s is None
+    if estimated:
+        from qpd.mlebench.led_phase import estimate_led_phase
+        iq_est = np.asarray(I).astype(np.float32).astype(float)+1j*np.asarray(Q).astype(np.float32).astype(float)
+        fp, est = estimate_led_phase(iq_est, fs, period, method='hmm')
+        fp = float(fp); ll = np.sort(np.asarray(est.get('loglik', []), float))[::-1]
+        phase = dict(estimated=True, method="qpd.mlebench.led_phase.estimate_led_phase(method='hmm')", first_pulse_time_s=fp,
+                     loglik_margin=float(ll[0]-ll[1]) if ll.size > 1 else None)
+    else:
+        fp = float(first_pulse_time_s)-shift
+        phase = dict(estimated=False, first_pulse_time_s=fp)
+    diag = dict(n_samples=n, duration_s=dur, sample_rate_hz=fs, first_pulse_time_s=fp, t0=shift, led_period_s=period, phase=phase,
                 options=dict(diagnostics=diagnostics, whiten=whiten, whiten_rho=whiten_rho, fallback_hmmsf=fallback_hmmsf),
                 weights=str(weights or DEFAULT_WEIGHTS), veto_s=H.VETO_S)
 
@@ -192,7 +208,7 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
         return LEDReconstructionResult(
             flip_times=np.asarray(flips, float)+shift, confidence=np.asarray(conf, float), decoder=decoder,
             network_flip_times=np.asarray(net, float)+shift, hmmsf_flip_times=None if hmm is None else np.asarray(hmm, float)+shift,
-            n_samples=n, sample_rate=fs, t0=shift, diagnostics=diag)
+            n_samples=n, sample_rate=fs, t0=shift, first_pulse_time_s=fp+shift, phase_estimated=estimated, diagnostics=diag)
 
     if abs(fs-FS) > 1e-6:
         if not fallback_hmmsf:
