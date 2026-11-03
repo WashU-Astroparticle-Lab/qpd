@@ -124,6 +124,20 @@ def noise_rho(rows):
     return float(np.sum(w*rho)/w.sum()) if w.size else float('nan')
 
 
+def noise_rho_slow(I, Q, rows, factor):
+    """:func:`noise_rho` at the rate of a record that was rebuilt to 100 kHz: ``rows`` come from the rebuilt record and
+    ``I``, ``Q`` are the original slow samples. Rebuilding hides the colour of the slow noise, so it is measured here."""
+    rho = []; w = []
+    iq = np.asarray(I, float)+1j*np.asarray(Q, float)
+    for r in rows:
+        seg = iq[r['start']//factor:r['stop']//factor]
+        if seg.size >= 8:
+            rho.append(_lag1(np.imag(np.conj(r['fit'].direction)*(seg-r['fit'].origin)))); w.append(seg.size)
+    rho, w = np.array(rho, float), np.array(w, float)
+    ok = np.isfinite(rho)
+    return float(np.sum(w[ok]*rho[ok])/w[ok].sum()) if ok.any() else float('nan')
+
+
 def whiten(I, Q, rho):
     """AR(1) pre-whitening: y_0 = x_0, y_k = (x_k - rho x_{k-1})/sqrt(1-rho^2). Returns float64 arrays."""
     out = []
