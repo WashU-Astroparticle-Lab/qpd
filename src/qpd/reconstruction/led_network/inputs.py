@@ -209,6 +209,23 @@ def mu_feature(mu):
     return float(np.log1p(max(float(mu), 0.0))/MU_SCALE)
 
 
+def rebuild_100khz(I, Q, factor=10, seed=0):
+    """A 100 kHz record from one sampled ``factor`` times slower, for the network, which only runs at 100 kHz.
+
+    Each slow sample becomes ``factor`` samples whose mean is exactly that sample, with zero-sum white noise inside
+    the block at the 100 kHz noise level (sqrt(factor) times the slow per-sample noise). If the slow samples average
+    their full sample period and their noise is white, the result is statistically a 100 kHz record with its flips
+    moved to block edges. It adds no information; anything finer than one slow sample stays unrecoverable.
+    """
+    rng = np.random.default_rng(seed); out = []
+    for x in (I, Q):
+        x = np.asarray(x, float)
+        sigma = np.median(np.abs(np.diff(x)))/(0.67449*np.sqrt(2))*np.sqrt(factor)
+        e = rng.normal(0., sigma, (x.size, factor)); e -= e.mean(axis=1, keepdims=True)
+        out.append((x[:, None]+e).ravel())
+    return out[0], out[1]
+
+
 def normalize_waveform(waveform):
     """Per-channel (x - median) / sigma, sigma = MAD of first differences / (0.6745 sqrt 2); float32 [2, N]."""
     x = np.asarray(waveform, dtype=np.float32)

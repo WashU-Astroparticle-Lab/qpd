@@ -10,6 +10,8 @@ from . import inputs as MI
 from .network import PERIOD_S
 
 FS = MI.FS
+SLOW_FS = 1e4
+SLOW_FACTOR = 10
 DEFAULT_WEIGHTS = Path(__file__).resolve().parent/'led_flip_network.pt'
 _MODELS = {}
 
@@ -128,9 +130,83 @@ def _split_iq(iq):
     raise ValueError('iq must be a 1-D complex trace, an (I, Q) pair or a (2, n) array')
 
 
+def _estimate_phase(I, Q, sample_rate, period):
+    from qpd.mlebench.led_phase import estimate_led_phase
+    iq_est = np.asarray(I).astype(np.float32).astype(float)+1j*np.asarray(Q).astype(np.float32).astype(float)
+    fp, est = estimate_led_phase(iq_est, sample_rate, period, method='hmm')
+    fp = float(fp); ll = np.sort(np.asarray(est.get('loglik', []), float))[::-1]
+    return fp, dict(estimated=True, method="qpd.mlebench.led_phase.estimate_led_phase(method='hmm')", first_pulse_time_s=fp,
+                    loglik_margin=float(ll[0]-ll[1]) if ll.size > 1 else None)
+
+
+def _reconstruct_10khz(I, Q, first_pulse_time_s, t0, led_period, diagnostics, whiten, whiten_rho, fallback_hmmsf,
+                       rebuild_seed, weights, threads):
+    """A 10 kHz record: whiten at 10 kHz, rebuild it to 100 kHz, run the network, and report on the 10 kHz grid.
+
+    Noise colour is measured and whitened here because the rebuilt record hides it. The HMM-SF baseline and the
+    fallback run on the 10 kHz samples themselves, not on the rebuilt noise.
+    """
+    t_start = time.perf_counter()
+    shift = float(t0); period = float(led_period); n = int(np.asarray(I).size); dur = n/SLOW_FS
+    estimated = first_pulse_time_s is None
+    if estimated:
+        # On the rebuilt record: the estimator's window lengths are set in samples for 100 kHz.
+        fp, phase = _estimate_phase(*MI.rebuild_100khz(I, Q, SLOW_FACTOR, rebuild_seed), FS, period)
+    else:
+        fp = float(first_pulse_time_s)-shift
+        phase = dict(estimated=False, first_pulse_time_s=fp)
+
+    def rho_of(a, b):
+        ya, yb = MI.rebuild_100khz(a, b, SLOW_FACTOR, rebuild_seed)
+        rows = H.segment_table(ya.astype(np.float32).astype(float)+1j*yb.astype(np.float32).astype(float), fp, with_posterior=False)
+        return H.noise_rho_slow(a, b, rows, SLOW_FACTOR)
+
+    wh = dict(mode=whiten, applied=False, measured_at_hz=SLOW_FS)
+    rho_after = float('nan')
+    if whiten != 'off' or whiten_rho is not None or diagnostics:
+        rho_after = rho_raw = rho_of(I, Q); wh.update(rho_hat_raw=rho_raw, auto_threshold=H.WHITEN_AUTO_THRESHOLD)
+        if whiten_rho is not None:
+            rho_use = float(whiten_rho); wh['source'] = 'whiten_rho (given)'
+        elif whiten == 'on' or (whiten == 'auto' and np.isfinite(rho_raw) and abs(rho_raw) > H.WHITEN_AUTO_THRESHOLD):
+            rho_use = rho_raw; wh['source'] = 'rho_hat'
+        else:
+            rho_use = None
+        if rho_use is not None and np.isfinite(rho_use) and abs(rho_use) < 1:
+            I, Q = H.whiten(I, Q, rho_use); wh.update(applied=True, rho_used=rho_use)
+            rho_after = wh['rho_hat_after'] = rho_of(I, Q)
+    yI, yQ = MI.rebuild_100khz(I, Q, SLOW_FACTOR, rebuild_seed)
+    out = reconstruct_parity_flips_led(yI+1j*yQ, FS, first_pulse_time_s=fp+shift, t0=shift, led_period=period, diagnostics=diagnostics,
+                                       whiten='off', weights=weights, threads=threads)
+    diag = out.diagnostics
+    diag.update(n_samples=n, sample_rate_hz=SLOW_FS, phase=phase, whitening=wh,
+                options=dict(diagnostics=diagnostics, whiten=whiten, whiten_rho=whiten_rho, fallback_hmmsf=fallback_hmmsf, rebuild_seed=rebuild_seed),
+                rebuild=dict(factor=SLOW_FACTOR, seed=rebuild_seed, n_samples=n*SLOW_FACTOR, snr_units='per 100 kHz sample (10 kHz per-sample SNR / sqrt(10))'))
+    out.n_samples, out.sample_rate, out.phase_estimated = n, SLOW_FS, estimated
+    if diagnostics:
+        hmm_raw, hmm_info = _hmm_sf(np.asarray(I, float)+1j*np.asarray(Q, float), fp, SLOW_FS, period)
+        ons = np.arange(fp, dur, period)
+        hmm = np.sort(hmm_raw[H.veto_mask(hmm_raw, ons)] if ons.size else hmm_raw)
+        out.hmmsf_flip_times = hmm+shift
+        diag['hmmsf'] = dict(n_flips=int(hmm.size), info=hmm_info)
+        diag['stats'].update(noise_lag1_autocorr=rho_after, whitening=wh)
+        for f in diag['flags']:
+            if f['name'] == 'coloured_noise':
+                t = H.THRESHOLDS['coloured_noise']
+                f.update(value=rho_after, fired=not (abs(rho_after) <= t['max_abs_rho1']))
+            elif f['name'] == 'prewhitened_input':
+                f.update(value=wh.get('rho_used'), fired=wh['applied'])
+        diag.update(hard_flags_fired=[f['name'] for f in diag['flags'] if f['fired'] and f['hard']],
+                    soft_flags_fired=[f['name'] for f in diag['flags'] if f['fired'] and not f['hard']])
+        if diag['hard_flags_fired'] and fallback_hmmsf:
+            out.flip_times, out.confidence, out.decoder = hmm+shift, np.full(hmm.size, np.nan), 'hmm_sf_fallback'
+            diag.update(decoder='hmm_sf_fallback', n_flips=int(hmm.size))
+    diag['seconds'] = time.perf_counter()-t_start
+    return out
+
+
 def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0=0.0, *, led_period=PERIOD_S,
                                  diagnostics=True, whiten='auto', whiten_rho=None, fallback_hmmsf=False,
-                                 weights=None, threads=None) -> LEDReconstructionResult:
+                                 rebuild_seed=0, weights=None, threads=None) -> LEDReconstructionResult:
     """Recover parity-flip times from one **LED-pulsed** I/Q record with the trained network.
 
     The LED pulses must follow the trained schedule (50 us on, 0.300 s off). Each pulse redraws the offset charge and
@@ -142,7 +218,9 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
     iq : complex array, or (I, Q) pair / (2, n) array
         One record, ``I + 1j*Q`` on a uniform grid. Trained on 1, 2 and 5 s records.
     sample_rate : float
-        Sampling rate [Hz]. The network is 100 kHz only; anything else raises unless ``fallback_hmmsf=True``.
+        Sampling rate [Hz]: 100 kHz, or 10 kHz (each sample averaging its full 100 us). The network itself runs at
+        100 kHz, so a 10 kHz record is first rebuilt to 100 kHz (:func:`inputs.rebuild_100khz`); flips closer than
+        one sample cannot be separated. Anything else raises unless ``fallback_hmmsf=True``.
     first_pulse_time_s : float, optional
         Time of the first LED pulse onset [s], on the same axis as ``t0`` (the LED trigger). If omitted, it is
         estimated from the waveform with :func:`qpd.mlebench.led_phase.estimate_led_phase` (``method='hmm'``, the
@@ -162,6 +240,8 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
         training. ``whiten_rho`` forces a known coefficient.
     fallback_hmmsf : bool
         When a hard flag fires, return the HMM-SF baseline's flips instead (``decoder == 'hmm_sf_fallback'``).
+    rebuild_seed : int
+        Seed of the block noise when a 10 kHz record is rebuilt, so the output is reproducible.
     weights : path, optional
         Network weights (default: the bundled ``led_flip_network.pt``).
     threads : int, optional
@@ -187,16 +267,14 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
         raise ValueError('fallback_hmmsf needs diagnostics (the hard flags)')
     t_start = time.perf_counter()
     I, Q = _split_iq(iq)
+    if abs(float(sample_rate)-SLOW_FS) < 1e-6:
+        return _reconstruct_10khz(I, Q, first_pulse_time_s, t0, led_period, diagnostics, whiten, whiten_rho, fallback_hmmsf,
+                                  rebuild_seed, weights, threads)
     shift = float(t0); fs, period = float(sample_rate), float(led_period)
     n = int(np.asarray(I).size); dur = n/fs
     estimated = first_pulse_time_s is None
     if estimated:
-        from qpd.mlebench.led_phase import estimate_led_phase
-        iq_est = np.asarray(I).astype(np.float32).astype(float)+1j*np.asarray(Q).astype(np.float32).astype(float)
-        fp, est = estimate_led_phase(iq_est, fs, period, method='hmm')
-        fp = float(fp); ll = np.sort(np.asarray(est.get('loglik', []), float))[::-1]
-        phase = dict(estimated=True, method="qpd.mlebench.led_phase.estimate_led_phase(method='hmm')", first_pulse_time_s=fp,
-                     loglik_margin=float(ll[0]-ll[1]) if ll.size > 1 else None)
+        fp, phase = _estimate_phase(I, Q, fs, period)
     else:
         fp = float(first_pulse_time_s)-shift
         phase = dict(estimated=False, first_pulse_time_s=fp)
@@ -212,7 +290,7 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
 
     if abs(fs-FS) > 1e-6:
         if not fallback_hmmsf:
-            raise ValueError(f'sample_rate={fs}: the network is 100 kHz only (use fallback_hmmsf=True for HMM-SF at this rate)')
+            raise ValueError(f'sample_rate={fs}: the network supports 100 kHz and 10 kHz (use fallback_hmmsf=True for HMM-SF at this rate)')
         times, _ = _hmm_sf(np.asarray(I, float)+1j*np.asarray(Q, float), fp, fs, period)
         ons = np.arange(fp, dur, period)
         flips = np.sort(times[H.veto_mask(times, ons)] if ons.size else times)

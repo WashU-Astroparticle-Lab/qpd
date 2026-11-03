@@ -90,6 +90,7 @@ Alongside `qpd.theory` the package now carries three further subpackages:
   - The network's inputs are computed by `inputs.py`. `hmm_channels` / `hmm_sf_channels` summarise the `led_hmm` posteriors. `record_inputs` gives the burst intensity `mu_hat` and the canonical I/Q rotation.
   - Health flags live in `health.py`; any hard flag sets `result.degenerate`. With `fallback_hmmsf=True`, a record with a hard flag gets the HMM-SF flips instead.
   - The network is trained for SNR 0.5–5 at 100 kHz with the `LEDPulseModel` schedule. Above SNR 6 it raises the hard flag `snr_above_trained_range`, because HMM-SF is better there.
+  - `sample_rate=1e4` is also accepted, for samples that each average their full 100 µs. `inputs.rebuild_100khz` turns each sample into 10 at 100 kHz with the same mean and white in-block noise (`rebuild_seed`), and the same network runs on that. Noise colour is measured and whitened at 10 kHz because the rebuilt record hides it; the HMM-SF baseline and fallback run on the 10 kHz samples; the phase is estimated on the rebuilt record because `led_phase` sets its windows in samples and is off by 0.4–5 ms on raw 10 kHz samples.
   - `qpd.reconstruction` exports it lazily, so importing the package never needs torch.
   - `checks/check_led_network.py` is the gate: API contract, weights hash, accuracy vs HMM-SF, the high-SNR and coloured-noise guards.
 
