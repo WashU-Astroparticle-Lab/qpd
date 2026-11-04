@@ -10,9 +10,7 @@ import math
 import numpy as np
 
 from . import inputs as MI
-from .network import ON_TIME_S, PERIOD_S
-
-FS = MI.FS
+FS, ON_TIME_S, PERIOD_S = MI.FS, MI.ON_TIME_S, MI.PERIOD
 VETO_S = 300e-6
 QUIET_AFTER_S = 0.030                       # quiet region: > 30 ms after an onset (burst kernel ~ e^{-t/3.7 ms})
 STANDARD_N = (100000, 200000, 500000)

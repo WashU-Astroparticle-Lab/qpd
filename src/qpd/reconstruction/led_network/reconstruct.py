@@ -7,9 +7,7 @@ import numpy as np
 
 from . import health as H
 from . import inputs as MI
-from .network import OFF_TIME_S, ON_TIME_S, PERIOD_S
-
-FS = MI.FS
+FS, ON_TIME_S, OFF_TIME_S, PERIOD_S = MI.FS, MI.ON_TIME_S, MI.OFF_TIME_S, MI.PERIOD
 DEFAULT_WEIGHTS = Path(__file__).resolve().parent/'led_flip_network.pt'
 _MODELS = {}
 
@@ -65,7 +63,10 @@ class LEDReconstructionResult:
 
 
 def _model(weights, threads):
-    import torch
+    try:
+        import torch
+    except ImportError as error:
+        raise ImportError('The LED flip network needs torch: pip install "qpd[led]" (reconstruct_parity_flips_hmmsf does not)') from error
     if threads is not None:
         torch.set_num_threads(int(threads))
     key = str(weights)
@@ -150,6 +151,25 @@ def _finish_resampled(out, sample_rate, n, fallback_hmmsf):
     return out
 
 
+def _whitening_coefficient(rho_raw, whiten, whiten_rho, wh):
+    """The AR(1) coefficient to whiten with, or None; records the choice in ``wh``."""
+    wh.update(rho_hat_raw=rho_raw, auto_threshold=H.WHITEN_AUTO_THRESHOLD)
+    if whiten_rho is not None:
+        wh['source'] = 'whiten_rho (given)'
+        return float(whiten_rho)
+    if whiten == 'on' or (whiten == 'auto' and np.isfinite(rho_raw) and abs(rho_raw) > H.WHITEN_AUTO_THRESHOLD):
+        wh['source'] = 'rho_hat'
+        return rho_raw
+    return None
+
+
+def _rho_slow(I, Q, sample_rate, first_pulse_time_s, period, rebuild_seed):
+    """Lag-1 noise autocorrelation of a record below 100 kHz, at its own rate."""
+    ya, yb = MI.rebuild_100khz(I, Q, sample_rate, rebuild_seed)
+    rows = H.segment_table(ya.astype(np.float32).astype(float)+1j*yb.astype(np.float32).astype(float), first_pulse_time_s, with_posterior=False, period_s=period)
+    return H.noise_rho_slow(I, Q, rows, sample_rate)
+
+
 def _reconstruct_fast(I, Q, sample_rate, first_pulse_time_s, t0, on_time_s, off_time_s, diagnostics, whiten, whiten_rho, fallback_hmmsf,
                       weights, threads):
     """Above 100 kHz: average down to 100 kHz, which keeps the signal and lowers the noise, and report on the original grid."""
@@ -178,24 +198,14 @@ def _reconstruct_slow(I, Q, sample_rate, first_pulse_time_s, t0, on_time_s, off_
         fp = float(first_pulse_time_s)-shift
         phase = dict(estimated=False, first_pulse_time_s=fp)
 
-    def rho_of(a, b):
-        ya, yb = MI.rebuild_100khz(a, b, sample_rate, rebuild_seed)
-        rows = H.segment_table(ya.astype(np.float32).astype(float)+1j*yb.astype(np.float32).astype(float), fp, with_posterior=False, period_s=period)
-        return H.noise_rho_slow(a, b, rows, sample_rate)
-
     wh = dict(mode=whiten, applied=False, measured_at_hz=sample_rate)
     rho_after = float('nan')
     if whiten != 'off' or whiten_rho is not None or diagnostics:
-        rho_after = rho_raw = rho_of(I, Q); wh.update(rho_hat_raw=rho_raw, auto_threshold=H.WHITEN_AUTO_THRESHOLD)
-        if whiten_rho is not None:
-            rho_use = float(whiten_rho); wh['source'] = 'whiten_rho (given)'
-        elif whiten == 'on' or (whiten == 'auto' and np.isfinite(rho_raw) and abs(rho_raw) > H.WHITEN_AUTO_THRESHOLD):
-            rho_use = rho_raw; wh['source'] = 'rho_hat'
-        else:
-            rho_use = None
+        rho_after = rho_raw = _rho_slow(I, Q, sample_rate, fp, period, rebuild_seed)
+        rho_use = _whitening_coefficient(rho_raw, whiten, whiten_rho, wh)
         if rho_use is not None and np.isfinite(rho_use) and abs(rho_use) < 1:
             I, Q = H.whiten(I, Q, rho_use); wh.update(applied=True, rho_used=rho_use)
-            rho_after = wh['rho_hat_after'] = rho_of(I, Q)
+            rho_after = wh['rho_hat_after'] = _rho_slow(I, Q, sample_rate, fp, period, rebuild_seed)
     yI, yQ = MI.rebuild_100khz(I, Q, sample_rate, rebuild_seed)
     out = reconstruct_parity_flips_led(yI+1j*yQ, FS, first_pulse_time_s=fp+shift, t0=shift, on_time_s=on_time_s, off_time_s=off_time_s, diagnostics=diagnostics,
                                        whiten='off', weights=weights, threads=threads)
@@ -206,8 +216,7 @@ def _reconstruct_slow(I, Q, sample_rate, first_pulse_time_s, t0, on_time_s, off_
     out.phase_estimated = estimated
     if diagnostics:
         hmm_raw, hmm_info = _hmm_sf(np.asarray(I, float)+1j*np.asarray(Q, float), fp, sample_rate, on_time_s, off_time_s)
-        ons = np.arange(fp, dur, period)
-        hmm = np.sort(hmm_raw[H.veto_mask(hmm_raw, ons)] if ons.size else hmm_raw)
+        hmm, _ = _veto(hmm_raw, fp, dur, period_s=period); hmm = np.sort(hmm)
         out.hmmsf_flip_times = hmm+shift
         diag['hmmsf'] = dict(n_flips=int(hmm.size), info=hmm_info)
         diag['stats'].update(noise_lag1_autocorr=rho_after, whitening=wh)
@@ -323,13 +332,7 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
     if whiten != 'off' or whiten_rho is not None or diagnostics:
         iq0 = np.asarray(I).astype(np.float32).astype(float)+1j*np.asarray(Q).astype(np.float32).astype(float)
         rows = H.segment_table(iq0, fp, with_posterior=diagnostics, period_s=period)
-        rho_raw = H.noise_rho(rows); wh.update(rho_hat_raw=rho_raw, auto_threshold=H.WHITEN_AUTO_THRESHOLD)
-        if whiten_rho is not None:
-            rho_use = float(whiten_rho); wh['source'] = 'whiten_rho (given)'
-        elif whiten == 'on' or (whiten == 'auto' and np.isfinite(rho_raw) and abs(rho_raw) > H.WHITEN_AUTO_THRESHOLD):
-            rho_use = rho_raw; wh['source'] = 'rho_hat'
-        else:
-            rho_use = None
+        rho_use = _whitening_coefficient(H.noise_rho(rows), whiten, whiten_rho, wh)
         if rho_use is not None and np.isfinite(rho_use) and abs(rho_use) < 1:
             I, Q = H.whiten(I, Q, rho_use); wh.update(applied=True, rho_used=rho_use)
             iq0 = np.asarray(I).astype(np.float32).astype(float)+1j*np.asarray(Q).astype(np.float32).astype(float)
@@ -360,3 +363,87 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
     diag['quiet_rate'] = H.quiet_rate_count(net, fp, n, period)
     diag.update(decoder=decoder, n_flips=int(flips.size), seconds=time.perf_counter()-t_start)
     return result(flips, conf, decoder, net, hmm)
+
+
+def reconstruct_parity_flips_hmmsf(iq, sample_rate=FS, first_pulse_time_s=None, t0=0.0, *, on_time_s=ON_TIME_S, off_time_s=OFF_TIME_S,
+                                   whiten='auto', whiten_rho=None, rebuild_seed=0) -> LEDReconstructionResult:
+    """Recover parity-flip times from one LED-pulsed I/Q record with HMM-SF alone. Does not need torch.
+
+    The same call as :func:`reconstruct_parity_flips_led`, and the same flips as its ``hmmsf_flip_times``: a per-window
+    four-state HMM with 2 ms smoothed-fit emissions, the quiet rate pinned at 20 Hz and a contrast gate of 2.5
+    (:func:`qpd.mlebench.led_hmm.predict_led_hmm`), then the 300 us post-onset veto. Windows that fail the gate report
+    no flips, so at low SNR it misses more than the network does; on long LED on times and very short periods it holds
+    up better.
+
+    Parameters
+    ----------
+    iq, sample_rate, first_pulse_time_s, t0, on_time_s, off_time_s, whiten, whiten_rho, rebuild_seed
+        As in :func:`reconstruct_parity_flips_led`. A record above 100 kHz is averaged down to 100 kHz. One below it is
+        decoded on its own samples; ``rebuild_seed`` only affects the phase estimate and the noise-colour measurement.
+
+    Returns
+    -------
+    LEDReconstructionResult
+        ``decoder == 'hmm_sf'``, ``flip_times`` (also in ``hmmsf_flip_times``), ``confidence`` all NaN and no ``mu_hat``.
+        ``degenerate`` covers only coloured noise left unwhitened and no window passing the gate; a record with few
+        passing windows is not flagged, see ``diagnostics['hmmsf']['info']['dead_fraction']``.
+
+    Examples
+    --------
+    >>> rec = reconstruct_parity_flips_hmmsf(iq, 1e4, first_pulse_time_s=0.0231, on_time_s=1e-4, off_time_s=60e-3)
+    >>> rec = reconstruct_parity_flips_hmmsf(iq, 1e4, on_time_s=1e-4, off_time_s=60e-3)   # phase estimated from the waveform
+    >>> rec.flip_times, rec.first_pulse_time_s, rec.phase_estimated
+    """
+    if whiten not in ('auto', 'on', 'off'):
+        raise ValueError("whiten must be 'auto', 'on' or 'off'")
+    on_time_s, off_time_s, fs = float(on_time_s), float(off_time_s), float(sample_rate)
+    if not (on_time_s > 0 and off_time_s > 0):
+        raise ValueError('on_time_s and off_time_s must be positive')
+    if not fs > 0:
+        raise ValueError('sample_rate must be positive')
+    I, Q = _split_iq(iq)
+    I, Q = np.asarray(I, float), np.asarray(Q, float)
+    if I.size < 8 or not (np.isfinite(I).all() and np.isfinite(Q).all()):
+        raise ValueError('I and Q must be finite 1-D arrays of equal length (>= 8)')
+    n = I.size
+    if fs > FS+1e-6:
+        yI, yQ = MI.average_100khz(I, Q, fs)
+        out = reconstruct_parity_flips_hmmsf(yI+1j*yQ, FS, first_pulse_time_s, t0, on_time_s=on_time_s, off_time_s=off_time_s, whiten=whiten, whiten_rho=whiten_rho)
+        out.diagnostics['resampled'] = dict(method='averaged to 100 kHz', n_samples=int(yI.size))
+        return _finish_resampled(out, fs, n, False)
+    slow = fs < FS-1e-6
+    t_start = time.perf_counter()
+    shift = float(t0); period = on_time_s+off_time_s; dur = n/fs
+    estimated = first_pulse_time_s is None
+    if estimated:
+        fp, phase = _estimate_phase(*MI.rebuild_100khz(I, Q, fs, rebuild_seed), FS, period) if slow else _estimate_phase(I, Q, fs, period)
+    else:
+        fp = float(first_pulse_time_s)-shift
+        phase = dict(estimated=False, first_pulse_time_s=fp)
+
+    def single(a, b):
+        return a.astype(np.float32).astype(float)+1j*b.astype(np.float32).astype(float)
+
+    def rho_of(a, b):
+        return _rho_slow(a, b, fs, fp, period, rebuild_seed) if slow else H.noise_rho(H.segment_table(single(a, b), fp, with_posterior=False, period_s=period))
+
+    wh = dict(mode=whiten, applied=False)
+    rho_after = rho_raw = rho_of(I, Q)
+    rho_use = _whitening_coefficient(rho_raw, whiten, whiten_rho, wh)
+    if rho_use is not None and np.isfinite(rho_use) and abs(rho_use) < 1:
+        I, Q = H.whiten(I, Q, rho_use); wh.update(applied=True, rho_used=rho_use)
+        rho_after = wh['rho_hat_after'] = rho_of(I, Q)
+    raw, info = _hmm_sf(I+1j*Q if slow else single(I, Q), fp, fs, on_time_s, off_time_s)
+    flips, _ = _veto(raw, fp, dur, period_s=period); flips = np.sort(flips)
+    T = H.THRESHOLDS
+    flags = [H.flag('coloured_noise', rho_after, not (abs(rho_after) <= T['coloured_noise']['max_abs_rho1']), True, T['coloured_noise']['max_abs_rho1'], T['coloured_noise']['rationale']),
+             H.flag('prewhitened_input', wh.get('rho_used'), wh['applied'], False, None, T['prewhitened_input']['rationale']),
+             H.flag('no_gated_segment', info['segments']-info['dead_segments'], info['dead_segments'] >= info['segments'], True, 1,
+                    'No window reaches smoothed-fit contrast 2.5, so HMM-SF reports no flips. Hard.')]
+    diag = dict(n_samples=n, duration_s=dur, sample_rate_hz=fs, first_pulse_time_s=fp, t0=shift, on_time_s=on_time_s, off_time_s=off_time_s, led_period_s=period, phase=phase,
+                options=dict(whiten=whiten, whiten_rho=whiten_rho, rebuild_seed=rebuild_seed), veto_s=H.VETO_S, whitening=wh, decoder='hmm_sf', n_flips=int(flips.size),
+                hmmsf=dict(n_flips=int(flips.size), info=info), flags=flags, hard_flags_fired=[f['name'] for f in flags if f['fired'] and f['hard']],
+                soft_flags_fired=[f['name'] for f in flags if f['fired'] and not f['hard']], quiet_rate=H.quiet_rate_count(flips, fp, int(round(dur*FS)), period),
+                seconds=time.perf_counter()-t_start)
+    return LEDReconstructionResult(flip_times=flips+shift, confidence=np.full(flips.size, np.nan), decoder='hmm_sf', hmmsf_flip_times=flips+shift, n_samples=n, sample_rate=fs,
+                                   t0=shift, first_pulse_time_s=fp+shift, phase_estimated=estimated, diagnostics=diag)

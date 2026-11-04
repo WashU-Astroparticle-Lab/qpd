@@ -12,6 +12,7 @@ Run: ``python checks/check_led_network.py`` (exit 0 = all checks pass). Seeds ar
 """
 
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,7 @@ from check_led_hmm import FS, PERIOD, RES, TOL, FastSimulator, max_separation, s
 from qpd import QPD  # noqa: E402
 from qpd.simulator import LEDPulseModel, WhiteGaussianNoise  # noqa: E402
 from qpd.mlebench.grade import match_times  # noqa: E402
-from qpd.reconstruction.led_network import LEDReconstructionResult, reconstruct_parity_flips_led  # noqa: E402
+from qpd.reconstruction.led_network import LEDReconstructionResult, reconstruct_parity_flips_hmmsf, reconstruct_parity_flips_led  # noqa: E402
 from qpd.reconstruction.led_network.reconstruct import DEFAULT_WEIGHTS  # noqa: E402
 
 WEIGHTS_SHA256 = "928b568b6e2817f3ea1e3cecd5f099cfa6c7b815b41453e3f30ab7f639abe63e"
@@ -290,6 +291,58 @@ def main():
     check("30 kHz, first_pulse_time_s omitted: phase estimated within 0.3 ms", rb.phase_estimated and abs(err) < 3e-4, f"error {1e6*err:+.0f} us")
     r = reconstruct_parity_flips_led(slower(iq, 1e3), 1e3, first_pulse_time_s=fp, **SCHEDULE)
     check("1 kHz runs and reports on the record's grid", r.sample_rate == 1e3 and r.branch.shape == (slower(iq, 1e3).size,), f"{r.flip_times.size} flips of {truth.size}")
+
+    print("HMM-SF on its own (reconstruct_parity_flips_hmmsf)")
+    iq, truth, fp = simulate_schedule(43, 3.0, ON, OFF, duration=1.0)
+    fast, fast_truth, fast_fp = simulate_schedule(44, 3.0, ON, OFF, duration=1.0, rate=2.5e5)
+    for label, x, rate, first in (("100 kHz", iq, FS, fp), ("10 kHz", slower(iq, 1e4), 1e4, fp), ("30 kHz", slower(iq, 3e4), 3e4, fp), ("250 kHz", fast, 2.5e5, fast_fp)):
+        h = reconstruct_parity_flips_hmmsf(x, rate, first, **SCHEDULE)
+        n = reconstruct_parity_flips_led(x, rate, first, **SCHEDULE)
+        hb = reconstruct_parity_flips_hmmsf(x, rate, **SCHEDULE)
+        nb = reconstruct_parity_flips_led(x, rate, **SCHEDULE)
+        check(f"{label}: same flips as the network call's hmmsf_flip_times, trigger time given and estimated", np.array_equal(h.flip_times, n.hmmsf_flip_times)
+              and np.array_equal(hb.flip_times, nb.hmmsf_flip_times) and hb.first_pulse_time_s == nb.first_pulse_time_s and hb.phase_estimated and not h.phase_estimated)
+        check(f"{label}: reported on the record's grid, decoder hmm_sf, no confidence", h.decoder == "hmm_sf" and h.sample_rate == rate and h.n_samples == x.size
+              and h.branch.shape == x.shape and np.isnan(h.confidence).all() and h.confidence.size == h.flip_times.size and not h.degenerate)
+    h = reconstruct_parity_flips_hmmsf(iq, FS, fp, **SCHEDULE)
+    e, p, f = eff_pur(truth, h.flip_times)
+    check("efficiency >= 0.6, purity >= 0.8", e >= 0.6 and p >= 0.8, f"eff {e:.3f} pur {p:.3f} F1 {f:.3f}")
+    d = reconstruct_parity_flips_hmmsf(simulate(21, 3.0, duration=1.0, n_qp=3.0)[0], FS, simulate(21, 3.0, duration=1.0, n_qp=3.0)[2])
+    r = reconstruct_parity_flips_led(simulate(21, 3.0, duration=1.0, n_qp=3.0)[0], FS, simulate(21, 3.0, duration=1.0, n_qp=3.0)[2])
+    check("schedule defaults to the trained one", np.array_equal(d.flip_times, r.hmmsf_flip_times))
+    s = reconstruct_parity_flips_hmmsf(iq, FS, fp + 10.0, t0=10.0, **SCHEDULE)
+    check("t0 shifts the flip times and nothing else", np.allclose(s.flip_times - 10.0, h.flip_times, rtol=0, atol=1e-9))
+    rng = np.random.default_rng(43)
+    x = slower(iq, 1e4)
+    e = (rng.normal(size=x.size) + 1j * rng.normal(size=x.size)) * np.std(np.diff(x.real)) / np.sqrt(2)
+    coloured = x + lfilter([np.sqrt(1 - 0.3 ** 2)], [1, -0.3], e)
+    ca, cn = reconstruct_parity_flips_hmmsf(coloured, 1e4, fp, **SCHEDULE), reconstruct_parity_flips_led(coloured, 1e4, fp, **SCHEDULE)
+    check("coloured noise: whitened, same flips as the network call", ca.diagnostics["whitening"]["applied"] and np.array_equal(ca.flip_times, cn.hmmsf_flip_times))
+    co = reconstruct_parity_flips_hmmsf(coloured, 1e4, fp, whiten="off", **SCHEDULE)
+    check("whiten='off' on coloured noise raises the hard flag", co.degenerate and "coloured_noise" in co.flags)
+    rng = np.random.default_rng(45)
+    noise = rng.normal(size=20000) + 1j * rng.normal(size=20000)
+    nn = reconstruct_parity_flips_hmmsf(noise, 1e4, 0.01, **SCHEDULE)
+    check("pure noise: flips only if a window passes the gate, hard flag if none does", nn.degenerate == (nn.diagnostics["hmmsf"]["info"]["dead_segments"] >= nn.diagnostics["hmmsf"]["info"]["segments"]),
+          f"{nn.flip_times.size} flips, degenerate {nn.degenerate}")
+    raises("a non-positive sample rate raises", lambda: reconstruct_parity_flips_hmmsf(iq, 0.0, fp))
+    raises("a non-positive on time raises", lambda: reconstruct_parity_flips_hmmsf(iq, FS, fp, on_time_s=0.0))
+    import subprocess
+    code = ("import sys\n"
+            "class NoTorch:\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name.split('.')[0] == 'torch':\n"
+            "            raise ImportError(name)\n"
+            "sys.meta_path.insert(0, NoTorch())\n"
+            "import numpy as np\n"
+            "from qpd.reconstruction import reconstruct_parity_flips_hmmsf, reconstruct_parity_flips_led\n"
+            "rng = np.random.default_rng(0); iq = rng.normal(size=20000) + 1j * rng.normal(size=20000)\n"
+            "print(reconstruct_parity_flips_hmmsf(iq, 1e4, 0.01, on_time_s=1e-4, off_time_s=60e-3).decoder)\n"
+            "try:\n    reconstruct_parity_flips_led(iq, 1e4, 0.01, on_time_s=1e-4, off_time_s=60e-3)\n"
+            "except ImportError as error:\n    print('ImportError', 'pip install' in str(error))\n")
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": src})
+    check("without torch: HMM-SF runs, the network raises a clear ImportError", p.stdout.split() == ["hmm_sf", "ImportError", "True"], p.stdout.strip() + p.stderr[-200:])
 
     print()
     if _failures:
