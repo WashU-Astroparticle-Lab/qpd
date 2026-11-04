@@ -27,11 +27,13 @@ N_PARAMETERS = 9848
 WEIGHTS_FORMAT = 'qpd-led-flip-network/1'
 
 
-def phase_channels(n_samples, first_pulse_time_s, sample_rate_hz=100000., *, device=None, dtype=torch.float32):
+def phase_channels(n_samples, first_pulse_time_s, sample_rate_hz=100000., *, on_time_s=ON_TIME_S, off_time_s=OFF_TIME_S,
+                   device=None, dtype=torch.float32):
     """[1, 2, N] LED timing cues computed from the schedule alone.
 
-    Channel 0 is the time since the most recent LED rise divided by the period: in [0, 1) after the first rise, and
-    the (negative) time to the first rise divided by the period before it. Channel 1 marks [rise, rise + 50 us).
+    Channel 0 is the time since the most recent LED rise divided by the trained 0.30005 s period: in [0, 1) after the
+    first rise, and the (negative) time to the first rise divided by that period before it. It keeps those units on
+    other schedules, so it always means the same time since onset. Channel 1 marks [rise, rise + on time).
     """
     if isinstance(n_samples, bool) or int(n_samples) != n_samples or n_samples < 1:
         raise ValueError("n_samples must be a positive integer")
@@ -41,8 +43,9 @@ def phase_channels(n_samples, first_pulse_time_s, sample_rate_hz=100000., *, dev
     if dtype not in (torch.float32, torch.float64):
         raise ValueError("Timing cues require float32 or float64")
     # ON and OFF are added in sample units separately, so the default boundaries are exactly 5 and 30005 samples.
-    on_samples = ON_TIME_S * rate
-    period_samples = on_samples + OFF_TIME_S * rate
+    on_samples = on_time_s * rate
+    period_samples = on_samples + off_time_s * rate
+    trained_period_samples = ON_TIME_S * rate + OFF_TIME_S * rate
     first_samples = first * rate
     if not all(math.isfinite(v) for v in (first_samples, on_samples, period_samples)):
         raise ValueError("Schedule sample coordinates must remain finite")
@@ -50,7 +53,7 @@ def phase_channels(n_samples, first_pulse_time_s, sample_rate_hz=100000., *, dev
     after = relative >= 0
     elapsed = torch.where(after, torch.remainder(relative, period_samples), relative)
     led_on = after & (elapsed < on_samples)
-    phase = (elapsed / period_samples).to(dtype)
+    phase = (elapsed / trained_period_samples).to(dtype)
     # Casting an almost-complete cycle to float32 must not turn it into 1.
     upper = torch.nextafter(phase.new_tensor(1), phase.new_tensor(0))
     phase = torch.minimum(phase, upper)
@@ -85,9 +88,10 @@ class LEDFlipNetwork(nn.Module):
         self._mu_value = None
         self._geometry_5s = None
 
-    def configure_phase(self, n_samples, first_pulse_time_s, sample_rate_hz=100000.):
+    def configure_phase(self, n_samples, first_pulse_time_s, sample_rate_hz=100000., on_time_s=ON_TIME_S, off_time_s=OFF_TIME_S):
         weight = self.input_projection.weight
-        self._phase_cues = phase_channels(n_samples, first_pulse_time_s, sample_rate_hz, device=weight.device, dtype=weight.dtype)
+        self._phase_cues = phase_channels(n_samples, first_pulse_time_s, sample_rate_hz, on_time_s=on_time_s, off_time_s=off_time_s,
+                                          device=weight.device, dtype=weight.dtype)
         return self
 
     def configure_hmm(self, channels):
@@ -165,26 +169,28 @@ def load_network(path):
     return model.eval()
 
 
-def configure(model, n_samples, first_pulse_time_s, sample_rate_hz=100000.):
+def configure(model, n_samples, first_pulse_time_s, sample_rate_hz=100000., on_time_s=ON_TIME_S, off_time_s=OFF_TIME_S):
     """Set the LED cues and tile the record into slots.
 
     The whole record is tiled at the trained density, and each available 20 ms post-onset tail at the denser LED
-    density. A 5 s record whose first pulse is at exactly 50 ms uses the fixed geometry stored with the weights.
+    density. A 5 s record on the trained schedule whose first pulse is at exactly 50 ms uses the fixed geometry stored
+    with the weights.
     """
-    model.configure_phase(n_samples, first_pulse_time_s, sample_rate_hz)
+    model.configure_phase(n_samples, first_pulse_time_s, sample_rate_hz, on_time_s, off_time_s)
+    trained = on_time_s == ON_TIME_S and off_time_s == OFF_TIME_S
     dev = model.support_start.device; dtype = model.support_start.dtype
     n = int(n_samples); end = float(np.nextafter(np.float32(n), np.float32(0)))
-    if n == 500000 and abs(first_pulse_time_s-.05) < 1e-12:
+    if trained and n == 500000 and abs(first_pulse_time_s-.05) < 1e-12:
         for name, value in model._geometry_5s.items():
             setattr(model, name, value.clone())
         return
     groups = max(1, round(4096*n/500000))
     start = torch.arange(groups, device=dev, dtype=dtype)*(end/groups)
     width = torch.full_like(start, end/groups)
-    rises = np.arange(float(first_pulse_time_s), n/sample_rate_hz, .30005)
+    rises = np.arange(float(first_pulse_time_s), n/sample_rate_hz, .30005 if trained else on_time_s+off_time_s)
     starts = [start]; widths = [width]
     for rise in rises:
-        lo = rise*sample_rate_hz; hi = min(lo+2000., end)
+        lo = rise*sample_rate_hz; hi = min(lo+min(2000., (on_time_s+off_time_s)*sample_rate_hz), end)
         if hi <= lo:
             continue
         count = max(1, round((hi-lo)*241/2000.))

@@ -4,7 +4,8 @@
 Covers the API contract (input forms, the t0 axis, the post-onset veto, the derived branch, the estimated LED phase
 when no trigger time is given, errors and the HMM-SF fallback), the bundled weights, accuracy on records from the
 LED-pulsing simulator against the HMM-SF baseline, the high-SNR guard, the coloured-noise guard (auto-whitening,
-and the hard flag when whitening is switched off), and all of these again for 10 kHz records.
+and the hard flag when whitening is switched off), all of these again for 10 kHz records, LED schedules other than the
+trained one (0.1 ms on / 60 ms off), and other sampling rates.
 
 Needs the optional extra (``pip install "qpd[led]"``); without torch it prints SKIP and exits 0.
 Run: ``python checks/check_led_network.py`` (exit 0 = all checks pass). Seeds are fixed.
@@ -25,7 +26,9 @@ except ImportError:
     print("SKIP: torch is not installed (pip install \"qpd[led]\")")
     sys.exit(0)
 
-from check_led_hmm import FS, PERIOD, TOL, simulate  # noqa: E402
+from check_led_hmm import FS, PERIOD, RES, TOL, FastSimulator, max_separation, simulate  # noqa: E402
+from qpd import QPD  # noqa: E402
+from qpd.simulator import LEDPulseModel, WhiteGaussianNoise  # noqa: E402
 from qpd.mlebench.grade import match_times  # noqa: E402
 from qpd.reconstruction.led_network import LEDReconstructionResult, reconstruct_parity_flips_led  # noqa: E402
 from qpd.reconstruction.led_network.reconstruct import DEFAULT_WEIGHTS  # noqa: E402
@@ -55,6 +58,25 @@ def eff_pur(truth, pred):
     m = match_times(np.sort(truth), np.sort(pred), TOL)
     eff, pur = m.tp / max(len(truth), 1), m.tp / max(len(pred), 1)
     return eff, pur, 2 * eff * pur / (eff + pur) if eff + pur else 0.0
+
+
+def simulate_schedule(seed, snr_max, on_time, off_time, duration=2.0, n_qp=3.0, rate=FS):
+    """Like check_led_hmm.simulate, on another LED schedule or (at the same noise density) a faster sampling rate."""
+    first = float(np.random.default_rng(seed).uniform(0, on_time + off_time))
+    sim = FastSimulator(
+        qpd=QPD(e_j_hz=6.95e9, e_c_hz=0.695e9, coupling_g_hz=40e6), resonator=RES,
+        f_drive=RES.f_r, sample_rate=rate, noise=WhiteGaussianNoise(sigma=max_separation() / snr_max * np.sqrt(rate / FS)),
+        led_pulsing=LEDPulseModel(on_time=on_time, off_time=off_time, first_pulse_time=first, expected_n_qp=n_qp, charge_jump_rate_hz=0.0))
+    res = sim.simulate(duration=duration, seed=seed)
+    return res.iq, res.flip_times, first
+
+
+def slower(iq, rate):
+    """The same record sampled at ``rate`` < 100 kHz: every sample averages its full sample period."""
+    n = int(iq.size * rate / FS)
+    k = np.floor(np.arange(iq.size) * rate / FS).astype(np.int64)
+    keep = k < n
+    return (np.bincount(k[keep], iq.real[keep], n) + 1j * np.bincount(k[keep], iq.imag[keep], n)) / np.bincount(k[keep], minlength=n)
 
 
 def to_10khz(iq):
@@ -94,6 +116,7 @@ def main():
     check("HMM-SF baseline flips reported", r.hmmsf_flip_times is not None and r.hmmsf_flip_times.size > 0)
     check("rate_hz and mu_hat are finite", np.isfinite(r.rate_hz) and np.isfinite(r.mu_hat))
     check("known trigger time is reported back", not r.phase_estimated and r.first_pulse_time_s == fp)
+    check("no schedule flag on the trained schedule", "untrained_schedule" not in r.flags and "untested_schedule" not in r.flags)
     rb = reconstruct_parity_flips_led(iq, FS)
     err = ((rb.first_pulse_time_s - fp + PERIOD / 2) % PERIOD) - PERIOD / 2
     _, _, f_known = eff_pur(truth, r.flip_times)
@@ -104,9 +127,7 @@ def main():
     rbs = reconstruct_parity_flips_led(iq, FS, t0=10.0)
     check("estimated phase reported on the t0 axis", np.isclose(rbs.first_pulse_time_s - 10.0, rb.first_pulse_time_s, rtol=0, atol=1e-9)
           and np.allclose(rbs.flip_times - 10.0, rb.flip_times, rtol=0, atol=1e-9))
-    raises("unsupported sample rate raises", lambda: reconstruct_parity_flips_led(iq, 2e5, first_pulse_time_s=fp))
-    rf = reconstruct_parity_flips_led(iq, 2e5, first_pulse_time_s=fp, fallback_hmmsf=True)
-    check("unsupported rate with fallback_hmmsf uses HMM-SF", rf.decoder == "hmm_sf_fallback" and rf.degenerate)
+    raises("a non-positive sample rate raises", lambda: reconstruct_parity_flips_led(iq, 0.0, first_pulse_time_s=fp))
 
     print("accuracy on simulated LED records (network vs HMM-SF)")
     f1_net, f1_sf = [], []
@@ -159,7 +180,7 @@ def main():
     check("same rebuild_seed reproduces the output", np.array_equal(r2.flip_times, r.flip_times))
     r3 = reconstruct_parity_flips_led(iq10, 1e4, first_pulse_time_s=fp, rebuild_seed=1)
     check("the block noise follows rebuild_seed", r3.diagnostics["options"]["rebuild_seed"] == 1
-          and r3.diagnostics["rebuild"]["n_samples"] == iq10.size * 10)
+          and r3.diagnostics["resampled"]["n_samples"] == iq10.size * 10)
     rs = reconstruct_parity_flips_led(iq10, 1e4, first_pulse_time_s=fp + 10.0, t0=10.0)
     check("t0 shifts the flip times and nothing else", np.allclose(rs.flip_times - 10.0, r.flip_times, rtol=0, atol=1e-9)
           and np.allclose(rs.hmmsf_flip_times - 10.0, r.hmmsf_flip_times, rtol=0, atol=1e-9))
@@ -203,6 +224,72 @@ def main():
     rw = reconstruct_parity_flips_led(iq10, 1e4, first_pulse_time_s=fp)
     check("white 10 kHz noise is left unwhitened", not rw.diagnostics["whitening"]["applied"] and "coloured_noise" not in rw.flags,
           f"rho_hat {rw.diagnostics['whitening']['rho_hat_raw']:.3f}")
+
+    print("LED 0.1 ms on / 60 ms off")
+    ON, OFF = 1e-4, 60e-3
+    SCHEDULE = dict(on_time_s=ON, off_time_s=OFF)
+    from qpd.mlebench.led_hmm import predict_led_hmm as hmm_sf
+    from qpd.reconstruction.led_network.health import onset_times, veto_mask
+    SF_KW = dict(on_time_s=ON, off_time_s=OFF, pin_quiet_rate=True, smooth_fit_s=2e-3, min_smoothed_contrast=2.5)
+    for rate, label in ((1e4, "10 kHz"), (FS, "100 kHz")):
+        f1_net, f1_sf = [], []
+        for seed, snr, n_qp in [(31, 3.0, 3.0), (32, 1.0, 3.0), (33, 2.0, 10.0), (34, 1.0, 1.0)]:
+            iq, truth, fp = simulate_schedule(seed, snr, ON, OFF, n_qp=n_qp)
+            r = reconstruct_parity_flips_led(to_10khz(iq) if rate == 1e4 else iq, rate, first_pulse_time_s=fp, **SCHEDULE)
+            e, p, f = eff_pur(truth, r.flip_times)
+            _, _, fs = eff_pur(truth, r.hmmsf_flip_times)
+            f1_net.append(f); f1_sf.append(fs)
+            check(f"{label}, seed {seed} (SNR {snr}, {n_qp:g} per pulse): network, no hard flag, efficiency >= 0.5, purity >= 0.75",
+                  r.decoder == "network" and not r.degenerate and e >= 0.5 and p >= 0.75, f"eff {e:.3f} pur {p:.3f} F1 {f:.3f} (HMM-SF F1 {fs:.3f})")
+        check(f"{label}: mean F1, network >= HMM-SF", np.mean(f1_net) >= np.mean(f1_sf), f"{np.mean(f1_net):.3f} vs {np.mean(f1_sf):.3f}")
+    iq, truth, fp = simulate_schedule(35, 3.0, ON, OFF, duration=1.0)
+    iq10 = to_10khz(iq)
+    r = reconstruct_parity_flips_led(iq10, 1e4, first_pulse_time_s=fp, **SCHEDULE)
+    check("soft flag untrained_schedule fires, reported on the 10 kHz grid", "untrained_schedule" in r.flags and "untrained_schedule" not in r.diagnostics["hard_flags_fired"]
+          and r.sample_rate == 1e4 and r.n_samples == iq10.size, str(r.flags))
+    ons = onset_times(fp, iq10.size / 1e4, ON + OFF)
+    check("the veto follows the given onsets", ons.size >= 16 and np.all(veto_mask(r.flip_times, ons)))
+    native, _ = hmm_sf(iq10, 1e4, first_pulse_time_s=fp, **SF_KW)
+    check("HMM-SF baseline uses the given schedule", np.array_equal(r.hmmsf_flip_times, np.sort(native[veto_mask(native, ons)])))
+    rb = reconstruct_parity_flips_led(iq10, 1e4, **SCHEDULE)
+    err = ((rb.first_pulse_time_s - fp + (ON + OFF) / 2) % (ON + OFF)) - (ON + OFF) / 2
+    check("first_pulse_time_s omitted: phase estimated within 0.3 ms", rb.phase_estimated and abs(err) < 3e-4, f"error {1e6*err:+.0f} us")
+    iq, truth, fp = simulate_schedule(36, 20.0, ON, OFF, duration=1.0)
+    rf = reconstruct_parity_flips_led(iq, FS, first_pulse_time_s=fp, fallback_hmmsf=True, **SCHEDULE)
+    single = iq.real.astype(np.float32).astype(float) + 1j * iq.imag.astype(np.float32).astype(float)     # as preprocess casts it
+    native, _ = hmm_sf(single, FS, first_pulse_time_s=fp, **SF_KW)
+    native = np.sort(native[veto_mask(native, onset_times(fp, iq.size / FS, ON + OFF))])
+    _, p, _ = eff_pur(truth, rf.flip_times)
+    check("100 kHz fallback runs HMM-SF on the given schedule", rf.decoder == "hmm_sf_fallback" and np.array_equal(rf.flip_times, native) and p >= 0.9, f"purity {p:.3f}")
+    iq, truth, fp = simulate_schedule(37, 3.0, ON, 20e-3, duration=1.0)
+    ru = reconstruct_parity_flips_led(iq, FS, first_pulse_time_s=fp, on_time_s=ON, off_time_s=20e-3)
+    check("a period below the tested range raises the hard flag", ru.degenerate and "untested_schedule" in ru.flags)
+    raises("a non-positive on time raises", lambda: reconstruct_parity_flips_led(iq, FS, first_pulse_time_s=fp, on_time_s=0.0))
+
+    print("other sampling rates")
+    from qpd.reconstruction.led_network.inputs import average_100khz, rebuild_100khz
+    iq, truth, fp = simulate_schedule(41, 3.0, ON, OFF, duration=1.0, rate=2.5e5)
+    y_i, _ = average_100khz(iq.real, iq.imag, 2.5e5)
+    check("averaging 250 kHz gives 100 kHz samples with the right mean", y_i.size == 100000 and np.isclose(y_i.mean(), iq.real.mean(), atol=1e-3))
+    r = reconstruct_parity_flips_led(iq, 2.5e5, first_pulse_time_s=fp, **SCHEDULE)
+    e, p, f = eff_pur(truth, r.flip_times)
+    check("250 kHz: network, reported on the record's grid, efficiency >= 0.6, purity >= 0.8", r.decoder == "network" and not r.degenerate and r.sample_rate == 2.5e5
+          and r.n_samples == iq.size and r.branch.shape == iq.shape and e >= 0.6 and p >= 0.8, f"eff {e:.3f} pur {p:.3f}")
+    iq, truth, fp = simulate_schedule(42, 3.0, ON, OFF, duration=1.0)
+    for rate in (5e4, 3e4, 5e3):
+        x = slower(iq, rate)
+        y_i, _ = rebuild_100khz(x.real, x.imag, rate)
+        edges = np.round(np.arange(x.size + 1) * FS / rate).astype(np.int64)
+        check(f"{rate/1e3:g} kHz: rebuilt blocks keep each sample's mean", y_i.size == edges[-1] and np.allclose(np.add.reduceat(y_i, edges[:-1]) / np.diff(edges), x.real))
+        r = reconstruct_parity_flips_led(x, rate, first_pulse_time_s=fp, **SCHEDULE)
+        e, p, f = eff_pur(truth, r.flip_times)
+        check(f"{rate/1e3:g} kHz: network, reported on the record's grid, efficiency >= 0.6, purity >= 0.8", r.decoder == "network" and not r.degenerate and r.sample_rate == rate
+              and r.n_samples == x.size and r.branch.shape == x.shape and e >= 0.6 and p >= 0.8, f"eff {e:.3f} pur {p:.3f}")
+    rb = reconstruct_parity_flips_led(slower(iq, 3e4), 3e4, **SCHEDULE)
+    err = ((rb.first_pulse_time_s - fp + (ON + OFF) / 2) % (ON + OFF)) - (ON + OFF) / 2
+    check("30 kHz, first_pulse_time_s omitted: phase estimated within 0.3 ms", rb.phase_estimated and abs(err) < 3e-4, f"error {1e6*err:+.0f} us")
+    r = reconstruct_parity_flips_led(slower(iq, 1e3), 1e3, first_pulse_time_s=fp, **SCHEDULE)
+    check("1 kHz runs and reports on the record's grid", r.sample_rate == 1e3 and r.branch.shape == (slower(iq, 1e3).size,), f"{r.flip_times.size} flips of {truth.size}")
 
     print()
     if _failures:
