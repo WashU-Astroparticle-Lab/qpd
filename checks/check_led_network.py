@@ -263,8 +263,10 @@ def main():
     _, p, _ = eff_pur(truth, rf.flip_times)
     check("100 kHz fallback runs HMM-SF on the given schedule", rf.decoder == "hmm_sf_fallback" and np.array_equal(rf.flip_times, native) and p >= 0.9, f"purity {p:.3f}")
     iq, truth, fp = simulate_schedule(37, 3.0, ON, 20e-3, duration=1.0)
-    ru = reconstruct_parity_flips_led(iq, FS, first_pulse_time_s=fp, on_time_s=ON, off_time_s=20e-3)
-    check("a period below the tested range raises the hard flag", ru.degenerate and "untested_schedule" in ru.flags)
+    kept = [reconstruct_parity_flips_led(iq, FS, first_pulse_time_s=fp, on_time_s=a, off_time_s=b) for a, b in ((ON, 20e-3), (10e-6, 300e-3), (ON, 1.0))]
+    check("inside the limits (0.1 ms / 20 ms, 10 us / 300 ms, 0.1 ms / 1 s): soft flag only", all("untrained_schedule" in k.flags and "untested_schedule" not in k.flags for k in kept))
+    flagged = [reconstruct_parity_flips_led(iq, FS, first_pulse_time_s=fp, on_time_s=a, off_time_s=b) for a, b in ((ON, 5e-3), (ON, 2.0), (1e-3, 100e-3))]
+    check("a period below 10 ms, a period above 1 s, an on time of 1 ms: hard flag", all(k.degenerate and "untested_schedule" in k.flags for k in flagged))
     raises("a non-positive on time raises", lambda: reconstruct_parity_flips_led(iq, FS, first_pulse_time_s=fp, on_time_s=0.0))
 
     print("other sampling rates")

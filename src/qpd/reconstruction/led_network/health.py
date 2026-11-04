@@ -19,8 +19,8 @@ WHITEN_AUTO_THRESHOLD = 0.05
 THRESHOLDS = {
     'untrained_schedule': dict(rationale='The network was trained on 50 us on / 300 ms off only. Other schedules run with the same weights and '
                                          'the schedule corrected in every input. Soft, informational.'),
-    'untested_schedule': dict(period_s=(0.0601, 0.30005), on_time_s=(50e-6, 100e-6), rationale='Benchmarked only at 50 us / 300 ms and 100 us / 60 ms. '
-                                                                                   'Other periods or on times between these are allowed; outside them nothing is known. Hard.'),
+    'untested_schedule': dict(period_s=(0.010, 1.001), on_time_s=(0.0, 100e-6), rationale='In simulation the network beats HMM-SF at on times up to 100 us and periods of '
+                                                                                  '10 ms to 1 s. It falls behind from 1 ms on, and shorter or longer periods are untested. Hard.'),
     'nonstandard_length': dict(rationale='Trained on 1, 2 and 5 s records; other lengths are tiled the same way but untested. Soft.'),
     'first_pulse_outside_period': dict(rationale='Training first pulses were in [0, period); a later one implies an unlogged earlier pulse. Soft.'),
     'axis_coherence': dict(min=0.8, rationale='Per-window parity axes disagree, so the canonical rotation is ill-defined; the network '

@@ -258,9 +258,8 @@ def reconstruct_parity_flips_led(iq, sample_rate=FS, first_pulse_time_s=None, t0
         Time of the first sample [s]; flip times are reported on this axis.
     on_time_s, off_time_s : float
         LED on and off times [s]. Every input, the slot layout, the veto and HMM-SF follow them, with the same weights.
-        Off the trained schedule the soft flag ``untrained_schedule`` fires. Benchmarked also at 100 us / 60 ms, where
-        accuracy is lower; a period outside 60.1-300.05 ms or an on time outside 50-100 us raises the hard flag
-        ``untested_schedule``.
+        Off the trained schedule the soft flag ``untrained_schedule`` fires. An on time above 100 us or a period outside
+        10 ms to 1 s raises the hard flag ``untested_schedule``: from 1 ms on, HMM-SF is the better decoder.
     diagnostics : bool
         Run the health / out-of-distribution flags and the HMM-SF baseline (default). False is fastest, and then
         ``degenerate`` cannot fire.
