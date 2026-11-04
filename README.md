@@ -175,13 +175,31 @@ F1 drops by about 0.01. At SNR 0.5 the estimate is often off by about 1 ms, and 
 estimated phase, the network still beats HMM-SF given the true phase in most settings. Pass the trigger time when it
 is logged.
 
-**10 kHz records.** Pass `sample_rate=1e4`; the call and the result are otherwise the same. Each sample must average its full 100 µs.
+**HMM-SF on its own.** `reconstruct_parity_flips_hmmsf` takes the same call and returns the same result fields, with the same flips as `rec.hmmsf_flip_times`. It doesn't need torch.
 
 ```python
-rec = reconstruct_parity_flips_led(iq_10khz, 1e4, first_pulse_time_s=0.0731, fallback_hmmsf=True)
+from qpd.reconstruction import reconstruct_parity_flips_hmmsf
+
+rec = reconstruct_parity_flips_hmmsf(iq, 1e4, first_pulse_time_s=0.0231, on_time_s=1e-4, off_time_s=60e-3)
+rec = reconstruct_parity_flips_hmmsf(iq, 1e4, on_time_s=1e-4, off_time_s=60e-3)    # phase estimated from the waveform
+rec.flip_times, rec.first_pulse_time_s, rec.phase_estimated, rec.degenerate
 ```
 
-The network is not retrained. Each 10 kHz sample is rebuilt into 10 samples at 100 kHz with the same mean and white noise at the 100 kHz level, which adds no information; `rebuild_seed` fixes that noise. Flips closer than one sample can't be separated. `rec.hmmsf_flip_times` and the fallback come from HMM-SF run on the 10 kHz samples themselves, and the SNR in the diagnostics is per 100 kHz sample (the 10 kHz per-sample SNR divided by √10). In simulation, F1 at 10 kHz is 0.006–0.021 below the network at 100 kHz. Against HMM-SF at 10 kHz, the network gains 0.06–0.085 at 100 kHz-equivalent SNR 0.5 and about 0.02 at SNR 1, and ties from SNR 2 up, where HMM-SF has the edge when bursts are crowded.
+Its `degenerate` only covers coloured noise left unwhitened and no window passing the contrast gate, and `confidence` is NaN.
+
+**Other sampling rates and LED schedules.** Give them in the call; the result is the same, on your record's own grid. Each sample must average its full sample period.
+
+```python
+rec = reconstruct_parity_flips_led(iq, 1e4, first_pulse_time_s=0.0231, on_time_s=1e-4, off_time_s=60e-3, fallback_hmmsf=True)
+
+# no trigger time logged: omit it; rec.first_pulse_time_s is the estimate
+rec = reconstruct_parity_flips_led(iq, 1e4, on_time_s=1e-4, off_time_s=60e-3, fallback_hmmsf=True)
+rec.first_pulse_time_s, rec.phase_estimated
+```
+
+The network is not retrained. A faster record is averaged down to 100 kHz. A slower one has each sample rebuilt into the 100 kHz samples it covers, with the same mean and white noise at the 100 kHz level, which adds no information; `rebuild_seed` fixes that noise, and flips closer than one sample can't be separated. Below 100 kHz, `rec.hmmsf_flip_times` and the fallback come from HMM-SF on your own samples; above it, on the averaged record. The SNR in the diagnostics is per 100 kHz sample. Off the trained schedule the soft flag `untrained_schedule` fires. An on time above 0.1 ms or a period outside 10 ms to 1 s raises the hard flag `untested_schedule`.
+
+At 10 kHz on the trained schedule, F1 is 0.006–0.021 below the network at 100 kHz. Against HMM-SF at 10 kHz, the network gains 0.06–0.085 at 100 kHz-equivalent SNR 0.5 and about 0.02 at SNR 1, and ties from SNR 2 up, where HMM-SF has the edge when bursts are crowded. At 0.1 ms on / 60 ms off and 10 kHz, overall F1 is 0.769 for the network and 0.739 for HMM-SF, both lower than at 300 ms (0.832, 0.820). In a sweep from 10 µs to 5 ms on and 10 ms to 1 s off, the network leads at on times up to 0.1 ms and HMM-SF from 1 ms: at 1 ms on / 10 ms off the network's purity falls to about 0.45, and at 1–5 ms on / 100 ms off its F1 is 0.53–0.66 against about 0.75 for HMM-SF. Use `fallback_hmmsf=True` to get HMM-SF wherever the hard flag fires.
 
 - **Schedule and sampling:** the network was trained on 1–5 s records at 100 kHz with the `LEDPulseModel` schedule (50 µs on, 300 ms off), per-sample SNR 0.5–5 and 0–10 tunnelling events per pulse.
 - **Where it beats HMM-SF:** inside that range it matches or beats HMM-SF, `predict_led_hmm(..., pin_quiet_rate=True, smooth_fit_s=2e-3, min_smoothed_contrast=2.5)`. The gain is largest when bursts are crowded.

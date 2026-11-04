@@ -10,19 +10,19 @@ import math
 import numpy as np
 
 from . import inputs as MI
-from .network import PERIOD_S
-
-FS = MI.FS
+FS, ON_TIME_S, PERIOD_S = MI.FS, MI.ON_TIME_S, MI.PERIOD
 VETO_S = 300e-6
 QUIET_AFTER_S = 0.030                       # quiet region: > 30 ms after an onset (burst kernel ~ e^{-t/3.7 ms})
 STANDARD_N = (100000, 200000, 500000)
 WHITEN_AUTO_THRESHOLD = 0.05
 
 THRESHOLDS = {
-    'sample_rate_mismatch': dict(rationale='The network, its input channels and mu_hat assume 100 kHz sampling. Hard.'),
-    'period_mismatch': dict(tol_s=1e-9, rationale='The slot geometry, the input channels and mu_hat assume a 0.30005 s LED period. Hard.'),
+    'untrained_schedule': dict(rationale='The network was trained on 50 us on / 300 ms off only. Other schedules run with the same weights and '
+                                         'the schedule corrected in every input. Soft, informational.'),
+    'untested_schedule': dict(period_s=(0.010, 1.001), on_time_s=(0.0, 100e-6), rationale='In simulation the network beats HMM-SF at on times up to 100 us and periods of '
+                                                                                  '10 ms to 1 s. It falls behind from 1 ms on, and shorter or longer periods are untested. Hard.'),
     'nonstandard_length': dict(rationale='Trained on 1, 2 and 5 s records; other lengths are tiled the same way but untested. Soft.'),
-    'first_pulse_outside_period': dict(rationale='Training first pulses were in [0, 0.30005) s; a later one implies an unlogged earlier pulse. Soft.'),
+    'first_pulse_outside_period': dict(rationale='Training first pulses were in [0, period); a later one implies an unlogged earlier pulse. Soft.'),
     'axis_coherence': dict(min=0.8, rationale='Per-window parity axes disagree, so the canonical rotation is ill-defined; the network '
                                                'fails for axis errors >= 60 deg. In-distribution >= 0.83. Hard.'),
     'raw_axis': dict(lo=120.0, hi=131.0, rationale='Raw parity axis outside the simulator frame (124.7 +- 1 deg). Expected on real '
@@ -51,10 +51,10 @@ THRESHOLDS = {
 }
 
 
-def segments(n, first_pulse_time_s):
+def segments(n, first_pulse_time_s, period_s=PERIOD_S):
     """(start, stop, onset_s or None) exactly as :func:`inputs.record_inputs` splits a record."""
     times = np.arange(n, dtype=float)/FS
-    rises = np.arange(first_pulse_time_s, n/FS, PERIOD_S)
+    rises = np.arange(first_pulse_time_s, n/FS, period_s)
     idx = np.searchsorted(times, rises)
     edges = np.unique(np.r_[0, idx, n])
     out = []
@@ -88,9 +88,9 @@ def _lag1(y):
     return float(np.dot(y[:-1], y[1:])/d) if d > 0 else float('nan')
 
 
-def segment_table(iq, first_pulse_time_s, with_posterior=True):
+def segment_table(iq, first_pulse_time_s, with_posterior=True, period_s=PERIOD_S):
     rows = []
-    for a, b, onset in segments(iq.size, first_pulse_time_s):
+    for a, b, onset in segments(iq.size, first_pulse_time_s, period_s):
         L = b-a
         if L < max(8, 2*MI.SMOOTH_M):
             continue
@@ -107,7 +107,7 @@ def segment_table(iq, first_pulse_time_s, with_posterior=True):
                  rho1=_lag1(y), sigma_ratio=float(sig_perp_mad/sig_perp_std) if sig_perp_std > 0 else float('nan'),
                  fit=fit, x=x)
         if with_posterior and r['gated']:
-            _, p = MI.segment_posterior(seg, FS, MI.SMOOTH_M)
+            _, p = MI.segment_posterior(seg, FS, MI.SMOOTH_M, period_s)
             r['posterior'] = p
         rows.append(r)
     return rows
@@ -124,13 +124,13 @@ def noise_rho(rows):
     return float(np.sum(w*rho)/w.sum()) if w.size else float('nan')
 
 
-def noise_rho_slow(I, Q, rows, factor):
+def noise_rho_slow(I, Q, rows, sample_rate):
     """:func:`noise_rho` at the rate of a record that was rebuilt to 100 kHz: ``rows`` come from the rebuilt record and
     ``I``, ``Q`` are the original slow samples. Rebuilding hides the colour of the slow noise, so it is measured here."""
     rho = []; w = []
     iq = np.asarray(I, float)+1j*np.asarray(Q, float)
     for r in rows:
-        seg = iq[r['start']//factor:r['stop']//factor]
+        seg = iq[int(r['start']*sample_rate/FS):int(r['stop']*sample_rate/FS)]
         if seg.size >= 8:
             rho.append(_lag1(np.imag(np.conj(r['fit'].direction)*(seg-r['fit'].origin)))); w.append(seg.size)
     rho, w = np.array(rho, float), np.array(w, float)
@@ -167,9 +167,9 @@ def axis_and_sign(rows):
     return out
 
 
-def quiet_rate_count(times, first_pulse_time_s, n):
+def quiet_rate_count(times, first_pulse_time_s, n, period_s=PERIOD_S):
     """Quiet flip rate from decoded flips > 30 ms after an onset (biased low by detection inefficiency)."""
-    dur = n/FS; ons = onset_times(first_pulse_time_s, dur); prev = np.r_[first_pulse_time_s-PERIOD_S, ons]
+    dur = n/FS; ons = onset_times(first_pulse_time_s, dur, period_s); prev = np.r_[first_pulse_time_s-period_s, ons]
     expo = 0.
     for k, o in enumerate(prev):
         lo = max(o+QUIET_AFTER_S, 0.); hi = min(prev[k+1] if k+1 < prev.size else dur, dur)
@@ -222,7 +222,7 @@ def flag(name, value, fired, hard, threshold, rationale):
     return dict(name=name, value=v, fired=bool(fired), hard=bool(hard), threshold=threshold, rationale=rationale)
 
 
-def evaluate(*, n, sample_rate_hz, first_pulse_time_s, period_s, mu_inputs, rows, net_times, hmm_times, whitening=None):
+def evaluate(*, n, sample_rate_hz, first_pulse_time_s, period_s, mu_inputs, rows, net_times, hmm_times, whitening=None, on_time_s=ON_TIME_S):
     """Return (flags, stats) for one record."""
     T = THRESHOLDS; ax = axis_and_sign(rows); F = []
     gated = [r for r in rows if r['gated']]
@@ -233,11 +233,13 @@ def evaluate(*, n, sample_rate_hz, first_pulse_time_s, period_s, mu_inputs, rows
     sigma_ratio = float(np.median(sr)) if sr.size else float('nan')
     ag_all = agreement(net_times, hmm_times); ag_g = agreement(in_gated(net_times, rows), in_gated(hmm_times, rows))
     pc = parity_consistency(net_times, rows, first_pulse_time_s)
-    t = T['sample_rate_mismatch']; F.append(flag('sample_rate_mismatch', float(sample_rate_hz), abs(sample_rate_hz-FS) > 1e-6, True, FS, t['rationale']))
-    t = T['period_mismatch']; F.append(flag('period_mismatch', float(period_s), abs(period_s-PERIOD_S) > t['tol_s'], True, PERIOD_S, t['rationale']))
+    t = T['untrained_schedule']; F.append(flag('untrained_schedule', float(period_s), abs(period_s-PERIOD_S) > 1e-9 or abs(on_time_s-ON_TIME_S) > 1e-12, False, PERIOD_S, t['rationale']))
+    t = T['untested_schedule']; F.append(flag('untested_schedule', float(period_s), not (t['period_s'][0]-1e-9 <= period_s <= t['period_s'][1]+1e-9
+                                                                                         and t['on_time_s'][0]-1e-12 <= on_time_s <= t['on_time_s'][1]+1e-12), True,
+                                              dict(period_s=t['period_s'], on_time_s=t['on_time_s']), t['rationale']))
     t = T['nonstandard_length']; F.append(flag('nonstandard_length', n/FS, n not in STANDARD_N, False, [1., 2., 5.], t['rationale']))
     t = T['first_pulse_outside_period']; F.append(flag('first_pulse_outside_period', float(first_pulse_time_s),
-                                                   not (0 <= first_pulse_time_s < PERIOD_S), False, [0., PERIOD_S], t['rationale']))
+                                                   not (0 <= first_pulse_time_s < period_s), False, [0., float(period_s)], t['rationale']))
     t = T['axis_coherence']; F.append(flag('axis_coherence_low', ax['axis_coherence'], not (ax['axis_coherence'] >= t['min']), True, t['min'], t['rationale']))
     t = T['raw_axis']; F.append(flag('raw_axis_off_training_frame', ax['axis_deg'], not (t['lo'] <= ax['axis_deg'] <= t['hi']), False, [t['lo'], t['hi']], t['rationale']))
     t = T['v4_sign']; F.append(flag('v4_sign_margin_small', ax['v4_cos'], not (abs(ax['v4_cos']) >= t['min_abs_cos'] and ax['v4_strength'] >= t['min_strength']), False,

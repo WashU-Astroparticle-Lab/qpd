@@ -27,8 +27,9 @@ the window.
 
 :func:`reconstruct_parity_flips_led` (in :mod:`.led_network`, optional extra
 ``qpd[led]``) is a trained network for **LED-pulsed** records (with the LED
-trigger time, or with the phase estimated from the waveform). It is imported
-lazily, so ``import qpd.reconstruction`` never needs torch.
+trigger time, or with the phase estimated from the waveform).
+:func:`reconstruct_parity_flips_hmmsf` is the same call with HMM-SF alone, and needs
+no torch. Both are imported lazily, so ``import qpd.reconstruction`` never needs torch.
 """
 
 from qpd.reconstruction.analysis import (
@@ -154,11 +155,11 @@ __all__ = [
     "plot_burst_multiplicity",
 ]
 
-_LAZY = {"reconstruct_parity_flips_led", "LEDReconstructionResult"}
+_LAZY = {"reconstruct_parity_flips_led", "reconstruct_parity_flips_hmmsf", "LEDReconstructionResult"}
 
 
 def __getattr__(name):
-    # The LED network needs torch (optional extra), so it is imported on first use.
+    # The LED decoders need optional extras, so they are imported on first use.
     if name in _LAZY:
         from qpd.reconstruction import led_network
         return getattr(led_network, name)

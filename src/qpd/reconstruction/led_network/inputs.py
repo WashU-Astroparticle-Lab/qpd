@@ -46,13 +46,13 @@ DENS = np.convolve(_pdf, np.ones(50)/50)[:len(_grid)]
 DGRID = _grid
 
 
-def segment_edges(n, sample_rate_hz, first_pulse_time_s):
+def segment_edges(n, sample_rate_hz, first_pulse_time_s, period=PERIOD):
     times = np.arange(n, dtype=float)/sample_rate_hz
-    rises = np.arange(first_pulse_time_s, n/sample_rate_hz, PERIOD)
+    rises = np.arange(first_pulse_time_s, n/sample_rate_hz, period)
     return np.unique(np.r_[0, np.searchsorted(times, rises), n])
 
 
-def hmm_channels(iq, sample_rate_hz, first_pulse_time_s):
+def hmm_channels(iq, sample_rate_hz, first_pulse_time_s, period=PERIOD):
     """float16 [3, N]: |P_t - P_{t-1}|, P[burst regime], |2 P_t - 1| of the per-window four-state HMM (P = P[branch B]).
 
     Zero at each window's first sample (swing) and in windows shorter than 8 samples.
@@ -62,14 +62,14 @@ def hmm_channels(iq, sample_rate_hz, first_pulse_time_s):
     if iq.ndim != 1 or iq.size < 8 or not np.isfinite(iq).all():
         raise ValueError('Expected a finite one-dimensional IQ trace')
     out = np.zeros((3, iq.size), dtype=np.float32)
-    edges = segment_edges(iq.size, sample_rate_hz, first_pulse_time_s)
+    edges = segment_edges(iq.size, sample_rate_hz, first_pulse_time_s, period)
     for start, stop in zip(edges[:-1], edges[1:]):
         if stop-start < 8:
             continue
         r = reconstruct_parity_flips_static(
             iq[start:stop], sample_rate_hz, t0=start/sample_rate_hz, p_flip_init=max(QUIESCENT_RATE_HZ/sample_rate_hz, 1e-9),
             n_rate_iterations=4, min_confidence=0.0, segment_blocks=1, decoder='viterbi', burst_aware=True, p_burst=P_BURST,
-            burst_rate_hz=1.0/PERIOD, burst_tau=BURST_TAU_S)
+            burst_rate_hz=1.0/period, burst_tau=BURST_TAU_S)
         p = np.asarray(r.posterior, dtype=float); b = np.asarray(r.diagnostics['burst_posterior'], dtype=float)
         if p.shape != (stop-start,) or b.shape != (stop-start,) or not (np.isfinite(p).all() and np.isfinite(b).all()):
             raise ValueError('HMM posterior shape/finiteness contract changed')
@@ -78,18 +78,18 @@ def hmm_channels(iq, sample_rate_hz, first_pulse_time_s):
     return np.clip(out, 0., 1.).astype(np.float16)
 
 
-def segment_posterior(seg, sample_rate_hz, m):
+def segment_posterior(seg, sample_rate_hz, m, period=PERIOD):
     """HMM-SF on one window up to the posterior: smoothed fit, projection, pinned four-state forward-backward."""
     fit, contrast = SF.smoothed_fit(seg, m)
     x = fit.project(seg); dt = 1.0/sample_rate_hz
     sigma = np.median(np.abs(np.diff(x)))/(0.67449*np.sqrt(2))
     log_emit4 = SF.gaussian_log_emissions(x, np.full(x.size, fit.mu_a), np.full(x.size, fit.mu_b), sigma)[[0, 1, 0, 1]]
-    trans = SF.burst_transition_matrix(max(QUIESCENT_RATE_HZ/sample_rate_hz, 1e-9), P_BURST, dt/PERIOD, dt/BURST_TAU_S)
+    trans = SF.burst_transition_matrix(max(QUIESCENT_RATE_HZ/sample_rate_hz, 1e-9), P_BURST, dt/period, dt/BURST_TAU_S)
     post4, _ = SF.forward_backward_regime(log_emit4, trans)
     return contrast, np.asarray(post4[1]+post4[3], dtype=float)
 
 
-def hmm_sf_channels(iq, sample_rate_hz, first_pulse_time_s):
+def hmm_sf_channels(iq, sample_rate_hz, first_pulse_time_s, period=PERIOD):
     """float16 [3, N]: c/(c+2.5) of the window's smoothed-fit contrast c, the gate (c >= 2.5), and |P_t - P_{t-1}|.
 
     Windows shorter than twice the 2 ms smoothing window get zeros.
@@ -98,11 +98,11 @@ def hmm_sf_channels(iq, sample_rate_hz, first_pulse_time_s):
     if iq.ndim != 1 or iq.size < 8 or not np.isfinite(iq).all():
         raise ValueError('Expected a finite one-dimensional IQ trace')
     m = max(int(round(SMOOTH_FIT_S*sample_rate_hz)), 1); out = np.zeros((3, iq.size), dtype=np.float32)
-    edges = segment_edges(iq.size, sample_rate_hz, first_pulse_time_s)
+    edges = segment_edges(iq.size, sample_rate_hz, first_pulse_time_s, period)
     for start, stop in zip(edges[:-1], edges[1:]):
         if stop-start < max(8, 2*m):
             continue
-        contrast, p = segment_posterior(iq[start:stop], sample_rate_hz, m)
+        contrast, p = segment_posterior(iq[start:stop], sample_rate_hz, m, period)
         if p.shape != (stop-start,) or not np.isfinite(p).all() or not np.isfinite(contrast):
             raise ValueError('HMM-SF posterior shape/finiteness contract changed')
         out[0, start:stop] = contrast/(contrast+MIN_CONTRAST)
@@ -163,11 +163,11 @@ def mle_from_ll(lls):
     return float(MU_GRID[i])
 
 
-def record_inputs(iq, first_pulse_time_s):
+def record_inputs(iq, first_pulse_time_s, period=PERIOD):
     """Returns dict(mu_hat, mu_missing, n_gated, axis_deg, rotation_deg, sign_flipped, v4_margin, segments)."""
     iq = np.asarray(iq).astype(np.complex128); n = iq.size
     times = np.arange(n, dtype=float)/FS
-    rises = np.arange(first_pulse_time_s, n/FS, PERIOD)
+    rises = np.arange(first_pulse_time_s, n/FS, period)
     idx = np.searchsorted(times, rises)
     edges = np.unique(np.r_[0, idx, n])
     lls, mids, seps, wts, axis_acc = [], [], [], [], 0j
@@ -209,20 +209,38 @@ def mu_feature(mu):
     return float(np.log1p(max(float(mu), 0.0))/MU_SCALE)
 
 
-def rebuild_100khz(I, Q, factor=10, seed=0):
-    """A 100 kHz record from one sampled ``factor`` times slower, for the network, which only runs at 100 kHz.
+def rebuild_100khz(I, Q, sample_rate=1e4, seed=0):
+    """A 100 kHz record from one sampled more slowly, for the network, which only runs at 100 kHz.
 
-    Each slow sample becomes ``factor`` samples whose mean is exactly that sample, with zero-sum white noise inside
-    the block at the 100 kHz noise level (sqrt(factor) times the slow per-sample noise). If the slow samples average
-    their full sample period and their noise is white, the result is statistically a 100 kHz record with its flips
-    moved to block edges. It adds no information; anything finer than one slow sample stays unrecoverable.
+    Each slow sample becomes the block of 100 kHz samples it covers, whose mean is exactly that sample, with zero-sum
+    white noise inside the block at the 100 kHz noise level (sqrt(100 kHz / sample_rate) times the slow per-sample
+    noise). If the slow samples average their full sample period and their noise is white, the result is statistically
+    a 100 kHz record with its flips moved to block edges. It adds no information; anything finer than one slow sample
+    stays unrecoverable.
     """
+    ratio = FS/float(sample_rate); factor = int(round(ratio)); whole = abs(ratio-factor) < 1e-9
     rng = np.random.default_rng(seed); out = []
     for x in (I, Q):
         x = np.asarray(x, float)
-        sigma = np.median(np.abs(np.diff(x)))/(0.67449*np.sqrt(2))*np.sqrt(factor)
-        e = rng.normal(0., sigma, (x.size, factor)); e -= e.mean(axis=1, keepdims=True)
-        out.append((x[:, None]+e).ravel())
+        sigma = np.median(np.abs(np.diff(x)))/(0.67449*np.sqrt(2))*np.sqrt(ratio)
+        if whole:
+            e = rng.normal(0., sigma, (x.size, factor)); e -= e.mean(axis=1, keepdims=True)
+            out.append((x[:, None]+e).ravel())
+        else:
+            edges = np.round(np.arange(x.size+1)*ratio).astype(np.int64); lengths = np.diff(edges)
+            e = rng.normal(0., sigma, int(edges[-1])); e -= np.repeat(np.add.reduceat(e, edges[:-1])/lengths, lengths)
+            out.append(np.repeat(x, lengths)+e)
+    return out[0], out[1]
+
+
+def average_100khz(I, Q, sample_rate):
+    """A 100 kHz record from one sampled faster: each 100 kHz sample is the mean of the samples inside it."""
+    out = []
+    for x in (I, Q):
+        x = np.asarray(x, float)
+        n = int(np.floor(x.size*FS/float(sample_rate)))
+        k = np.floor(np.arange(x.size)*FS/float(sample_rate)).astype(np.int64); keep = k < n
+        out.append(np.bincount(k[keep], weights=x[keep], minlength=n)/np.bincount(k[keep], minlength=n))
     return out[0], out[1]
 
 
