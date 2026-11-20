@@ -208,10 +208,15 @@ At 10 kHz on the trained schedule, F1 is 0.006–0.021 below the network at 100 
 - **Coloured noise:** it is whitened automatically (`whiten='auto'`).
 - **Full example:** [`examples/example_led_network.py`](examples/example_led_network.py); `checks/check_led_network.py` is the gate.
 
+## Calibrated LED physics decoder
+
+With paired even and odd I/Q calibrations, the LED physics decoder jointly estimates offset charge and parity. It reports flip times and can return a charge posterior for each sample. [Inputs, assumptions and example](docs/led_physics_decoder.md).
+
 ## Verification
 
 ```bash
 python checks/check_led_pulsing.py              # LED pulse / count / charge checks
+python checks/check_led_physics.py              # charge and parity posterior checks
 python checks/check_led_network.py              # LED flip network (needs .[led])
 python checks/check_parity_reconstruction.py     # reconstruction regression gate
 python checks/check_reconstruction_benchmark.py  # surrogate-replay benchmark gate

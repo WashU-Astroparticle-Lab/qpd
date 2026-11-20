@@ -96,7 +96,11 @@ from qpd.reconstruction.static_bias import (
     reconstruct_parity_flips_static,
 )
 
+from qpd.reconstruction.led_physics import LEDPhysicsResult, reconstruct_parity_flips_led_physics
+
 __all__ = [
+    "LEDPhysicsResult",
+    "reconstruct_parity_flips_led_physics",
     # swept n_g
     "reconstruct_parity_flips_ramped",
     "ReconstructionResult",
