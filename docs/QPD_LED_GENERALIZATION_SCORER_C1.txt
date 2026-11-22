@@ -1,0 +1,60 @@
+Generalization scorer C1 — frozen 2026-11-11
+
+Implementation: src/qpd/mlebench/led_generalization_score.py
+Historical scorer B is unchanged. C1 is a new scientific utility, not a repair
+that makes scores comparable to historical B.
+
+For each recording, tolerance epsilon=max(50 microseconds,2/fs). The matching
+cutoff is L=max(2 milliseconds,4*epsilon). In the accepted5–500kHz range L=2ms.
+Each matched pair contributes c(d)=4*(max(d-epsilon,0)/(L-epsilon))^2;
+unmatched predictions cost3 and unmatched truth events cost1. Minimize their
+sum over optional one-to-one assignments. At/beyond L leave pairs unmatched.
+Cost reaches FP+FN=4 continuously at L: no utility discontinuity at cutoff.
+The quadratic tail preserves a zero-cost precision zone while progressively
+removing credit; it is a utility choice, not a fitted physical likelihood.
+
+Sorted-time convex matching admits an uncrossed optimal assignment. A sparse
+maximum-saving increasing-chain dynamic program with a Fenwick tree computes
+it exactly, O(E log(Npred)) time and O(E+Npred) memory for E candidate edges.
+No dense global event matrix is built. Inputs above5million candidate edges
+fail explicitly with no approximate result. This defensive resource ceiling
+is not a scientific event cap. Equal primary scores retain the first state
+encountered; no lexicographic precise-match bonus is used. Floating-point
+strict comparisons determine numerical ties. Duplicate times retain their
+multiplicity. Public grading sorts input events. Direct helper calls require
+sorted arrays. Events must lie in[0,duration_s); dataset truth remains the
+simulator's first-through-last-sample physical truth without reset/onset veto.
+
+Primary aggregation has exactly six strata: broad/nominal/stress crossed with
+zero/nonzero LED mean. Weights are(.6,.25,.15) times(.1,.9). Within each stratum,
+pool all costs and divide by all physical truth counts, then sum fixed-weight
+stratum ratios. This is event-normalized utility inside each stratum, not an
+equal-record or equal-exposure objective. Generation distributions define the
+integration over continuous nuisance parameters. Exact floating-point nuisance
+values do not become groups. Zero LED mean does not mean no background truth.
+Empty individual recordings contribute all false positives to the numerator.
+Missing or wholly zero-truth strata invalidate the primary score(error=None);
+weights are never silently redistributed. Always report pooled cost/second,
+FP/second, and truly empty-record FP/second as exposure diagnostics. These
+remain diagnostics and never silently replace the primary selection metric.
+
+Return primary_valid, invalid_reason, error, by_stratum, by_record, pooled,
+empty_truth, version and settings. Events DataFrames require record_id,t;
+manifest requires record_id,duration_s,sample_rate_hz,component,zero_led.
+Strata are private evaluation metadata and must never be supplied to the model.
+score_record and aggregate_records support small engineering/training panels
+without claiming a valid six-stratum scientific score.
+
+Report precise counts under sample-aware tolerance and fixed50us, late matches,
+FP,FN and timing costs. Fixed50us counts describe the C-optimal assignment,
+not a separately maximized strict50us F1 score. Neither unresolved bursts nor
+reset-adjacent events are excluded. Baselines limited to one event per interval
+must disclose that limitation; their ceiling must not redefine truth.
+
+Tests: checks/check_led_generalization_score.py compares600 small randomized
+cases(including duplicate quantized times) to an independent dense Hungarian
+assignment oracle. It checks exact boundary behavior, empty/multiplicity cases,
+invalid inputs, all-six-stratum aggregation, replication/permutation invariance,
+empty-record penalties, missing-stratum rejection and20000 disconnected events.
+Run under conda environment straxion. No training or validation scores were used
+to choose this utility; freeze before scientific checkpoint selection.

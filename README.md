@@ -30,6 +30,8 @@ qpd.plot_all()
 
 ## LED-pulsed waveforms
 
+To test a reconstruction algorithm, follow the [LED reconstruction handover](docs/led_reconstruction_handover.md) for training and validation data, C1 scoring, and the fixed waveform comparison.
+
 `LEDPulseModel` generates synchronized, independent chunks: the first pulse is
 at 50 ms, followed by 50 µs ON and 300 ms OFF. Each pulse draws a Poisson
 tunneling count and reuses the existing Gaussian-plus-exponential time profile,

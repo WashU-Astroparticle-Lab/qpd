@@ -1,0 +1,166 @@
+{
+  "version": "led_standalone_nominal_snr2",
+  "status": "prospective_standalone_simulation_specification",
+  "parameters": {
+    "sample_rate_hz": {
+      "min": 5000.0,
+      "max": 500000.0,
+      "nominal": 10000.0,
+      "sampling": "log"
+    },
+    "duration_s": {
+      "min": 0.5,
+      "max": 5.0,
+      "nominal": 1.0,
+      "sampling": "log"
+    },
+    "on_time_s": {
+      "min": 1e-06,
+      "max": 0.0005,
+      "nominal": 5e-05,
+      "sampling": "log"
+    },
+    "off_time_s": {
+      "min": 0.005,
+      "max": 0.1,
+      "nominal": 0.03,
+      "sampling": "log"
+    },
+    "mean_tunnels": {
+      "min": 0.0,
+      "max": 10.0,
+      "nominal": 1.0,
+      "sampling": "log1p_positive"
+    },
+    "burst_sigma_s": {
+      "min": 0.0002,
+      "max": 0.0006,
+      "nominal": 0.0004,
+      "sampling": "linear"
+    },
+    "burst_tau_s": {
+      "min": 0.0004,
+      "max": 0.0012,
+      "nominal": 0.0008,
+      "sampling": "linear"
+    },
+    "quiescent_rate_hz": {
+      "min": 1.0,
+      "max": 100.0,
+      "nominal": 20.0,
+      "sampling": "log"
+    },
+    "charge_jump_rate_hz": {
+      "min": 1.0,
+      "max": 10.0,
+      "nominal": 1.6666666666666667,
+      "sampling": "log"
+    },
+    "snr_max": {
+      "min": 0.5,
+      "max": 5.0,
+      "nominal": 2.0,
+      "sampling": "log"
+    }
+  },
+  "burst_mu_s": 0.0002,
+  "zero_led_mean_fraction": 0.1,
+  "sampling_design": {
+    "status": "frozen_v1",
+    "component_weights": {
+      "broad": 0.6,
+      "nominal": 0.25,
+      "stress": 0.15
+    },
+    "broad": "randomized Latin hypercube, transformed by each parameter's sampling rule",
+    "nominal": "half exact nominal; half independently uniform within +/-20%, clipped to allowed ranges",
+    "stress": "cycle declared endpoint combinations; zero-mean assignment overrides event mean",
+    "zero_led_assignment": "exact overall fraction; largest-remainder allocation across components; randomly assigned within each component",
+    "first_onset": "uniform in [0, on_time_s + off_time_s), including fractional sample phase"
+  },
+  "iq_augmentation": {
+    "status": "engineering_proposal_not_instrument_calibrated",
+    "rotation_radians": [
+      -3.141592653589793,
+      3.141592653589793
+    ],
+    "translation_disk_radius_in_max_contrast": 2.0,
+    "formula": "z_aug = exp(1j*theta) * z + b",
+    "translation_distribution": "uniform disk; radius 2 * fixed device maximum noiseless parity contrast",
+    "independence": "independent of physics, noise, zero-LED status and sampling component",
+    "applied_to": "complete noisy complex waveform before float32 export and before baseline inference",
+    "gain": 1.0
+  },
+  "model_inputs": [
+    "I",
+    "Q",
+    "sample_rate_hz",
+    "first_pulse_time_s",
+    "on_time_s",
+    "off_time_s"
+  ],
+  "baseline": {
+    "status": "identified_PR50_native_no_onset_veto_adapter_validated_on_engineering_pilot",
+    "source": "https://github.com/WashU-Astroparticle-Lab/qpd/pull/50",
+    "source_revision": "bed0f74422f23d8ca56da4f6a77381ff90307791",
+    "implementation": "qpd.mlebench.led_generalization_hmmsf.predict_hmmsf",
+    "native_sample_rate": true,
+    "onset_veto_s": 0.0,
+    "smooth_fit_s": 0.002,
+    "min_smoothed_contrast": 2.5,
+    "quiet_rate_prior_hz": 20.0,
+    "burst_flip_probability_per_sample": 0.3,
+    "required_as_input": false,
+    "nominal_emg": {
+      "mu_s": 0.0002,
+      "sigma_s": 0.0004,
+      "tau_s": 0.0008
+    },
+    "access": "same observable waveform and acquisition metadata as model; no per-record nuisance truth",
+    "warning": "HMM-SF uses tau as geometric regime lifetime; mu and sigma belong to the separate EMG intensity estimator. Fixed burst probability per sample is rate dependent and needs review."
+  },
+  "simulation": {
+    "parameters_fixed_within_record": true,
+    "charge_redraw_at_every_led_rise": true,
+    "additional_charge_resets": "independent Poisson process, absolute uniform charge redraws",
+    "snr": "maximum noiseless parity contrast divided by per-quadrature single-sample white-noise standard deviation",
+    "readout": "instantaneous sampled parity; additive independent white Gaussian I/Q noise",
+    "led_delays": "nonnegative-conditioned EMG plus uniform excitation within ON window",
+    "pre_record_pulse_history": "none; first onset is the first physical pulse",
+    "observed_truth_window": "from first to last sample, as implemented by the parity simulator",
+    "veto": false
+  },
+  "scorer": {
+    "status": "frozen_v1",
+    "implementation": "qpd.mlebench.led_generalization_score",
+    "precise_tolerance_s": "max(0.00005, 2 / sample_rate_hz)",
+    "fixed_50us_diagnostic": true,
+    "fp_cost": 3.0,
+    "fn_cost": 1.0,
+    "matching": "direct minimum total cost one-to-one assignment; no cost-saving match at cutoff",
+    "matching_cutoff_s": "max(0.002, 4 * precise_tolerance_s)",
+    "timing_cost": "4 * (max(0, abs(dt)-tolerance)/(cutoff-tolerance))**2 within cutoff",
+    "aggregation": "sum over broad/nominal/stress x zero/nonzero strata of fixed component weights x .1/.9 times pooled cost / pooled truth count; lower is better",
+    "empty_truth": "empty-record false positives contribute to stratum cost; zero-truth or absent stratum invalidates primary score, exposure diagnostic remains defined",
+    "veto": false
+  },
+  "scale": {
+    "engineering_pilot_records": 260,
+    "initial_training_records": 20000,
+    "initial_validation_records": 4000,
+    "initial_reserved_evaluation_records": 4000,
+    "training_learning_curve": [
+      5000,
+      10000,
+      20000
+    ],
+    "counts_are_caps": false,
+    "scale_up_condition": "measured learning curves, validation uncertainty, throughput and available allocation justify expansion",
+    "reserved_combinations": {
+      "A": "sample_rate_hz <= 10000 and snr_max <= 1.4 and burst_tau_s >= 0.00085",
+      "B": "sample_rate_hz >= 100000 and off_time_s <= 0.010 and burst_tau_s >= 0.001",
+      "allocation": "3200 independent in-domain reserve plus 800 challenge; no reserve model selection",
+      "training_validation_exclusion": "exclude union A and B; preserve declared component and zero proportions"
+    }
+  }
+}
