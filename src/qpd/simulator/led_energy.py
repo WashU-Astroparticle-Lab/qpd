@@ -46,7 +46,8 @@ class LEDEnergyModel:
 
     eta_ce includes the channel share and absorber pair breaking. Fixed
     multiplication_gain converts captures to an effective mobile population.
-    The remaining defaults illustrate an Al absorber and Hf OCS trap.
+    The defaults describe an Al absorber and two equal Hf OCS traps.
+    The mobile population is shared equally across both 500 µm³ volumes.
     """
 
     deposited_energy_ev: float
@@ -54,10 +55,10 @@ class LEDEnergyModel:
     absorber_gap_ev: float = 190e-6
     fano_factor: float = 0.2
     trapping_probability: float = 0.2
-    multiplication_gain: float = 2.0
+    multiplication_gain: float = 2.375  # 0.5 * (190 µeV / 40 µeV)
     tunneling_constant_um3_s: float = 20e3
     qp_lifetime_s: float = 1e-3
-    trap_volume_um3: float = 500.0
+    trap_volume_um3: float = 1000.0  # combined volume for the channel population
 
     def __post_init__(self) -> None:
         for field in fields(self):

@@ -66,10 +66,11 @@ To set pulse strength from a substrate energy deposit in one channel, pass an
 including both phonon collection and absorber pair breaking.
 
 ```python
+from scipy.constants import c, electron_volt, h
 from qpd import LEDEnergyModel
 
 sim.led_pulsing = LEDPulseModel(energy_model=LEDEnergyModel(
-    deposited_energy_ev=0.095, eta_ce=0.10,
+    deposited_energy_ev=h * c / (625e-9 * electron_volt), eta_ce=0.10,
 ))
 result = sim.simulate(duration=5.0, seed=0)
 population = result.led.population  # absorber_qp, captured_qp, mobile_qp, lambda_ch
@@ -87,10 +88,11 @@ Each absorber quasiparticle is captured with probability 0.20 by default.
 For a specified geometry, pass
 `trapping_probability=diffusion_trapping_probability(absorber_length_um, trap_length_um)`
 using the helper from `qpd`. Captures receive a fixed effective multiplication
-gain (default 2). The pulse's Poisson mean is then
+gain (default 2.375 from a 0.5 efficiency and the 190/40 gap ratio). The pulse's Poisson mean is then
 `lambda_ch = mobile_qp * tunneling_constant_um3_s * qp_lifetime_s / trap_volume_um3`.
 The example uses a 190 µeV Al absorber gap and illustrative Hf OCS parameters
-of 20,000 µm³/s, 1 ms and 500 µm³. Each pulse uses the LED timing profile above.
+of 20,000 µm³/s, 1 ms and 1,000 µm³ combined (500 µm³ per side, equal sharing).
+Each pulse deposits the full energy of one 625 nm photon in the substrate. Each pulse uses the LED timing profile above.
 See [Ramanathan et al., Eqs. 3, 14, 17 and B1](https://doi.org/10.1103/kqd2-spb1).
 
 Explore the [executed LED energy-response notebook](notebooks/led_energy_response.ipynb) to compare the pulse populations and flip-count variance.

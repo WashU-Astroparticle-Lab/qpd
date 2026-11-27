@@ -239,19 +239,19 @@ def main():
     pop = truth.population
     flips = np.asarray([burst.n_qp for burst in truth.bursts])
     # E[N_abs]=50, Var=10. Binomial capture gives E=10, Var=8.4.
-    # A fixed gain of 2 and K*tau/V=0.04 give E[S]=0.8.
+    # Whole-channel Hf volume gives K*tau/V=0.02 and 0.0475 flips per capture.
     for label, draws, mean, variance, tol_mean, tol_var in (
         ("absorber", pop.absorber_qp, 50, 10, 0.12, 0.35),
         ("captured", pop.captured_qp, 10, 8.4, 0.12, 0.35),
-        ("flips", flips, 0.8, 0.8 + 0.08**2 * 8.4, 0.025, 0.035),
+        ("flips", flips, 0.475, 0.475 + 0.0475**2 * 8.4, 0.025, 0.035),
     ):
         check(f"{label} count mean and variance",
               abs(draws.mean() - mean) < tol_mean and abs(draws.var() - variance) < tol_var,
               f"{len(draws)} pulses, mean={draws.mean():.4f}, variance={draws.var():.4f}")
     check("capture, multiplication and integrated rate use the same pulse",
           np.all(pop.captured_qp <= pop.absorber_qp)
-          and np.array_equal(pop.mobile_qp, 2 * pop.captured_qp)
-          and np.allclose(pop.lambda_ch, 0.04 * pop.mobile_qp)
+          and np.array_equal(pop.mobile_qp, 2.375 * pop.captured_qp)
+          and np.allclose(pop.lambda_ch, 0.02 * pop.mobile_qp)
           and np.all(flips[pop.lambda_ch == 0] == 0))
     geometry = diffusion_trapping_probability(300, 10)
     check("geometry matches Eq. B1 for alpha=1 and beta=0.4",
