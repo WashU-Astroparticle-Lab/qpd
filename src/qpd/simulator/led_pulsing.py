@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .led_energy import LEDEnergyModel, LEDPopulationTruth
 from .quasiparticle_bursts import (
     BurstTruth,
     QuasiparticleBurstModel,
@@ -39,6 +40,7 @@ class LEDTruth:
     charge_reset_times: np.ndarray
     charge_reset_values: np.ndarray
     charge_reset_is_led: np.ndarray
+    population: LEDPopulationTruth | None = None
 
     @property
     def event_times(self) -> np.ndarray:
@@ -58,8 +60,9 @@ class LEDPulseModel:
     """Generate an LED pulse train and its tunneling and offset-charge truth.
 
     The default train starts at 50 ms, stays ON for 50 us, then OFF for 300 ms
-    (a 300.05 ms period). Each pulse has a Poisson-distributed tunneling count
-    with mean ``expected_n_qp``. Each event's excitation time is uniform across
+    (a 300.05 ms period). The Poisson mean comes from ``expected_n_qp``
+    (default 10) or from the per-pulse population drawn by ``energy_model``.
+    Each event's excitation time is uniform across
     the ON window, followed by the existing exponentially modified Gaussian
     delay with defaults mu=1.2 ms, sigma=0.4 ms, and tau=3.7 ms. Negative EMG
     delays are resampled, conditioning the delay distribution to be causal.
@@ -78,31 +81,35 @@ class LEDPulseModel:
     on_time: float = 50e-6
     off_time: float = 0.300
     first_pulse_time: float = 0.050
-    expected_n_qp: float = 10.0
+    expected_n_qp: float | None = None
     tau: float = 3.7e-3
     mu: float = 1.2e-3
     sigma: float = 0.4e-3
     charge_jump_rate_hz: float = 1.0 / 60.0
     n_g_min: float = -0.5
     n_g_max: float = 0.5
+    energy_model: LEDEnergyModel | None = None
 
     def __post_init__(self) -> None:
-        for name in (
-            "on_time", "off_time", "first_pulse_time", "expected_n_qp",
+        if self.energy_model is None and self.expected_n_qp is None:
+            self.expected_n_qp = 10.0
+        if self.energy_model is not None and self.expected_n_qp is not None:
+            raise ValueError("choose either energy_model or expected_n_qp")
+        parameters = (
+            "on_time", "off_time", "first_pulse_time",
             "tau", "mu", "sigma", "charge_jump_rate_hz", "n_g_min", "n_g_max",
-        ):
+        )
+        if self.expected_n_qp is not None:
+            parameters += ("expected_n_qp",)
+        for name in parameters:
             value = np.asarray(getattr(self, name), dtype=float)
             if value.ndim != 0 or not np.isfinite(value):
                 raise ValueError(f"{name} must be a finite scalar")
+            if name not in ("n_g_min", "n_g_max") and value < 0:
+                raise ValueError(f"{name} must be non-negative")
             setattr(self, name, float(value))
         if self.on_time <= 0:
             raise ValueError("on_time must be positive")
-        for name in (
-            "off_time", "first_pulse_time", "expected_n_qp", "tau", "mu",
-            "sigma", "charge_jump_rate_hz",
-        ):
-            if getattr(self, name) < 0:
-                raise ValueError(f"{name} must be non-negative")
         if not np.isfinite(self.period):
             raise ValueError("on_time + off_time must be finite")
         if self.n_g_max <= self.n_g_min or not np.isfinite(
@@ -144,12 +151,17 @@ class LEDPulseModel:
 
         # Sample at zero before assigning onset times so rejection operates on
         # true delays, without subtracting large absolute timestamps.
+        population = None
+        mean_flips = self.expected_n_qp
+        if self.energy_model is not None:
+            population = self.energy_model.sample(pulse_times.size, burst_rng)
+            mean_flips = population.lambda_ch
         _, raw_bursts = QuasiparticleBurstModel(
             times=np.zeros(pulse_times.size),
             tau=self.tau,
             mu=self.mu,
             sigma=self.sigma,
-            expected_n_qp=self.expected_n_qp,
+            expected_n_qp=mean_flips,
         ).sample(burst_rng)
         bursts: list[BurstTruth] = []
         for onset, burst in zip(pulse_times, raw_bursts):
@@ -196,6 +208,7 @@ class LEDPulseModel:
             charge_reset_times=reset_times[order],
             charge_reset_values=reset_values[order],
             charge_reset_is_led=reset_is_led[order],
+            population=population,
         )
 
 

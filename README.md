@@ -60,6 +60,43 @@ starts a fresh chunk with the same LED phase; change the seed for a new
 realization. See [`notebooks/led_pulsing.ipynb`](notebooks/led_pulsing.ipynb)
 for timing controls, waveform plots, and an optional count sweep.
 
+To set pulse strength from a substrate energy deposit in one channel, pass an
+`LEDEnergyModel` to the same simulator. Energies are in eV. Supply the fraction
+`eta_ce` converted to quasiparticle energy in that channel's absorber,
+including both phonon collection and absorber pair breaking.
+
+```python
+from scipy.constants import c, electron_volt, h
+from qpd import LEDEnergyModel
+
+sim.led_pulsing = LEDPulseModel(energy_model=LEDEnergyModel(
+    deposited_energy_ev=h * c / (625e-9 * electron_volt), eta_ce=0.10,
+))
+result = sim.simulate(duration=5.0, seed=0)
+population = result.led.population  # absorber_qp, captured_qp, mobile_qp, lambda_ch
+flips_per_pulse = [burst.n_qp for burst in result.led.bursts]
+```
+
+At fixed deposit the mean initial count is `deposited_energy_ev * eta_ce /
+absorber_gap_ev`. A discrete approximation preserves that mean and targets
+variance `fano_factor * mean` (default F = 0.2). For fractional means the
+smallest possible integer-count variance is `frac(mean) * (1 - frac(mean))`;
+the simulator uses that floor whenever the requested variance is smaller.
+This approximates the production cascade at the level of its first two moments.
+
+Each absorber quasiparticle is captured with probability 0.20 by default.
+For a specified geometry, pass
+`trapping_probability=diffusion_trapping_probability(absorber_length_um, trap_length_um)`
+using the helper from `qpd`. Captures receive a fixed effective multiplication
+gain (default 2.375 from a 0.5 efficiency and the 190/40 gap ratio). The pulse's Poisson mean is then
+`lambda_ch = mobile_qp * tunneling_constant_um3_s * qp_lifetime_s / trap_volume_um3`.
+The example uses a 190 µeV Al absorber gap and illustrative Hf OCS parameters
+of 20,000 µm³/s, 1 ms and 1,000 µm³ combined (500 µm³ per side, equal sharing).
+Each pulse deposits the full energy of one 625 nm photon in the substrate. The notebook below sets the LED timing from the [nominal pipeline specification](configs/siderius/led_standalone_snr2.json), with EMG location 0.2 ms, width 0.4 ms and decay 0.8 ms.
+See [Ramanathan et al., Eqs. 3, 14, 17 and B1](https://doi.org/10.1103/kqd2-spb1).
+
+Explore the [executed LED energy-response notebook](notebooks/led_energy_response.ipynb) to compare the pulse populations and flip-count variance.
+
 ## Reconstruction
 
 Given a readout trace, recover when the parity flipped. Blind by default: the

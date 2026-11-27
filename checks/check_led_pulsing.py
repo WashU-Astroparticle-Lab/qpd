@@ -15,11 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from qpd import QPD  # noqa: E402
 from qpd.simulator import (  # noqa: E402
     ConstantNg,
+    LEDEnergyModel,
     LEDPulseModel,
     LEDTruth,
     QuasiparticleBurstModel,
     ResonatorConfig,
     VNASimulator,
+    diffusion_trapping_probability,
     led_count_sweep,
 )
 
@@ -228,6 +230,49 @@ def main():
     check("real dispersive calculation produces finite charge-dependent I/Q",
           real.iq.shape == (100,) and np.all(np.isfinite(real.iq))
           and real.led.pulse_times.size == 1 and np.ptp(real.iq.real) > 0)
+
+    print("Energy-driven counts in one LED channel")
+    energy = LEDEnergyModel(deposited_energy_ev=0.095, eta_ce=0.1)
+    pulses = LEDPulseModel(energy_model=energy, first_pulse_time=0.0,
+                           on_time=0.001, off_time=0.009)
+    truth = pulses.sample(399.995, np.random.default_rng(882))
+    pop = truth.population
+    flips = np.asarray([burst.n_qp for burst in truth.bursts])
+    # E[N_abs]=50, Var=10. Binomial capture gives E=10, Var=8.4.
+    # Whole-channel Hf volume gives K*tau/V=0.02 and 0.0475 flips per capture.
+    for label, draws, mean, variance, tol_mean, tol_var in (
+        ("absorber", pop.absorber_qp, 50, 10, 0.12, 0.35),
+        ("captured", pop.captured_qp, 10, 8.4, 0.12, 0.35),
+        ("flips", flips, 0.475, 0.475 + 0.0475**2 * 8.4, 0.025, 0.035),
+    ):
+        check(f"{label} count mean and variance",
+              abs(draws.mean() - mean) < tol_mean and abs(draws.var() - variance) < tol_var,
+              f"{len(draws)} pulses, mean={draws.mean():.4f}, variance={draws.var():.4f}")
+    check("capture, multiplication and integrated rate use the same pulse",
+          np.all(pop.captured_qp <= pop.absorber_qp)
+          and np.array_equal(pop.mobile_qp, 2.375 * pop.captured_qp)
+          and np.allclose(pop.lambda_ch, 0.02 * pop.mobile_qp)
+          and np.all(flips[pop.lambda_ch == 0] == 0))
+    geometry = diffusion_trapping_probability(300, 10)
+    check("geometry matches Eq. B1 for alpha=1 and beta=0.4",
+          np.isclose(geometry, 2 * (np.sinh(0.5) + 0.4 * np.cosh(0.5))
+                     / (1.16 * np.sinh(1) + 0.8 * np.cosh(1))))
+    tiny = LEDEnergyModel(deposited_energy_ev=1, eta_ce=0.1, absorber_gap_ev=1)
+    tiny_abs = tiny.sample(100000, np.random.default_rng(79)).absorber_qp
+    check("sub-unit yield respects integer variance floor and preserves mean",
+          np.max(tiny_abs) == 1 and abs(tiny_abs.mean() - 0.1) < 0.005)
+    energy_zero = LEDPulseModel(energy_model=LEDEnergyModel(0, 0.1))
+    dark = FastSimulator(**base, led_pulsing=energy_zero).simulate(seed=41)
+    check("zero deposit reproduces the zero-LED waveform and records zero populations",
+          np.array_equal(dark.iq, result.iq) and np.all(dark.led.population.lambda_ch == 0))
+    active = FastSimulator(**base, led_pulsing=pulses,
+                           gamma_even_to_odd=0, gamma_odd_to_even=0).simulate(seed=8)
+    events = active.led.event_times
+    check("energy-mode event times drive waveform parity",
+          len(events) > 0 and np.array_equal(active.flip_times,
+              events[(events > active.t[0]) & (events <= active.t[-1])]))
+    rejects("rejects simultaneous energy and fixed-mean inputs",
+            lambda: LEDPulseModel(expected_n_qp=1, energy_model=energy))
 
     print("8. Invalid settings and incompatible simulation modes")
     for kwargs in (
