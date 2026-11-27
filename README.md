@@ -92,7 +92,7 @@ gain (default 2.375 from a 0.5 efficiency and the 190/40 gap ratio). The pulse's
 `lambda_ch = mobile_qp * tunneling_constant_um3_s * qp_lifetime_s / trap_volume_um3`.
 The example uses a 190 µeV Al absorber gap and illustrative Hf OCS parameters
 of 20,000 µm³/s, 1 ms and 1,000 µm³ combined (500 µm³ per side, equal sharing).
-Each pulse deposits the full energy of one 625 nm photon in the substrate. Each pulse uses the LED timing profile above.
+Each pulse deposits the full energy of one 625 nm photon in the substrate. The notebook below sets the LED timing from the [nominal pipeline specification](configs/siderius/led_standalone_snr2.json), with EMG location 0.2 ms, width 0.4 ms and decay 0.8 ms.
 See [Ramanathan et al., Eqs. 3, 14, 17 and B1](https://doi.org/10.1103/kqd2-spb1).
 
 Explore the [executed LED energy-response notebook](notebooks/led_energy_response.ipynb) to compare the pulse populations and flip-count variance.
