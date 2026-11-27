@@ -1,5 +1,6 @@
 """VNA S21 timeseries simulator for QPD transmons."""
 
+from qpd.simulator.led_energy import LEDEnergyModel, diffusion_trapping_probability
 from qpd.simulator.led_pulsing import LEDPulseModel, LEDTruth, led_count_sweep
 from qpd.simulator.noise import NoiseModel, WhiteGaussianNoise
 from qpd.simulator.offset_charge import (
@@ -25,6 +26,8 @@ __all__ = [
     "VNASimulator",
     "SimResult",
     "LEDPulseModel",
+    "LEDEnergyModel",
+    "diffusion_trapping_probability",
     "LEDTruth",
     "led_count_sweep",
     "ResonatorConfig",
